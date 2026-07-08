@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @page { size: A4; margin: 1.5cm; }
+        body { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
+        .header { border-bottom: 3px solid {{ color }}; padding-bottom: 15px; display: flex; justify-content: space-between; margin-bottom: 30px;}
+        .title { font-size: 20px; font-weight: bold; color: {{ color }}; }
+        .meta { font-size: 10px; color: #7f8c8d; text-align: right; }
+
+        h2 { color: #2c3e50; font-size: 14px; text-transform: uppercase; border-bottom: 1px solid #eee; margin-top: 25px; padding-bottom: 5px; }
+
+        .highlight { background: #f8f9fa; border-left: 4px solid {{ color }}; padding: 15px; border-radius: 4px; }
+        .badge { background: #d4edda; color: #155724; padding: 4px 10px; border-radius: 10px; font-weight: bold; font-size: 12px; }
+
+        .grid { display: table; width: 100%; border-spacing: 10px; margin: -10px; }
+        .col { display: table-cell; width: 33%; background: #fff; border: 1px solid #eee; padding: 10px; text-align: center; border-radius: 6px; }
+        .val { font-size: 18px; font-weight: bold; display: block; }
+        .lbl { font-size: 10px; text-transform: uppercase; color: #999; }
+
+        .inc-box { display: table-cell; width: 50%; padding: 15px; border-radius: 6px; }
+        .inc-ext { background: #fff3cd; color: #856404; }
+        .inc-int { background: #d1ecf1; color: #0c5460; }
+
+        img { max-width: 100%; border: 1px solid #eee; border-radius: 6px; }
+        .footer { position: fixed; bottom: 0; width: 100%; text-align: center; font-size: 9px; color: #ccc; border-top: 1px solid #eee; padding-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">TM Infraestructura <br><span style="font-size:12px; color:#333">{{ titulo }}</span></div>
+        <div class="meta">{{ data.meta.hospital }}<br>{{ data.meta.fecha }}</div>
+    </div>
+
+    <div class="highlight">
+        <span class="badge">UPTIME: {{ data.resumen.uptime }}</span>
+        <p style="margin: 10px 0 0 0; font-style: italic">"{{ data.resumen.texto }}"</p>
+    </div>
+
+    <h2>1. Visión Operativa</h2>
+    <div style="text-align: center; margin-bottom: 20px;">
+        {% if grafico %}<img src="{{ grafico }}">{% endif %}
+    </div>
+
+    <h2>2. Estado Infraestructura</h2>
+    <div class="grid">
+        <div class="col"><span class="val">{{ data.infraestructura.energia }}</span><span class="lbl">Energía</span></div>
+        <div class="col"><span class="val">{{ data.infraestructura.termica }}</span><span class="lbl">Térmica</span></div>
+        <div class="col"><span class="val">24/7</span><span class="lbl">Monitoreo</span></div>
+    </div>
+    <p style="font-size: 11px; color: #666; margin-top: 5px;">{{ data.infraestructura.mensaje }}</p>
+
+    <h2>3. Gestión de Incidencias</h2>
+    <div class="grid">
+        <div class="inc-box inc-ext">
+            <strong style="display:block; font-size:24px">{{ data.incidencias.externas }}</strong>
+            <span style="font-size:11px; text-transform:uppercase">Tickets Usuario</span>
+        </div>
+        <div class="inc-box inc-int">
+            <strong style="display:block; font-size:24px">{{ data.incidencias.internas }}</strong>
+            <span style="font-size:11px; text-transform:uppercase">Proactivos (System)</span>
+        </div>
+    </div>
+    <div style="margin-top: 10px; font-size: 12px; color: #555; padding: 10px; background: #fafafa; border-radius: 4px;">
+        <strong>Análisis:</strong> {{ data.incidencias.analisis }}
+    </div>
+
+    <h2>4. Calidad & Recomendaciones</h2>
+    <ul>
+        <li><strong>Estabilidad:</strong> {{ data.calidad.estabilidad }}</li>
+        <li><strong>Caso Clave:</strong> {{ data.calidad.caso_destacado }}</li>
+    </ul>
+    <div style="border-left: 3px solid #f39c12; padding-left: 10px; margin-top: 15px;">
+        <strong style="color: #e67e22; font-size: 11px;">RECOMENDACIÓN:</strong>
+        <p style="margin: 2px 0 0 0; font-size: 12px;">{{ data.recomendacion }}</p>
+    </div>
+
+    <div class="footer">Generado automáticamente por TecnoMonitor v3.0 - {{ data.meta.tipo|upper }}</div>
+</body>
+</html>
