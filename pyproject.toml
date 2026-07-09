@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "informes-ia"
+version = "0.1.0"
+description = "Módulo de generación de informes con IA para TecnoMonitor"
+requires-python = ">=3.10"
+
+# No listamos [project.dependencies] a propósito: ya instalaste el
+# requirements.txt del módulo en la Fase 0. Este archivo solo declara
+# la ESTRUCTURA del paquete para que pip lo pueda instalar en modo editable.
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["informes_ia*"]
