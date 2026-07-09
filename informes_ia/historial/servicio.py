@@ -39,6 +39,10 @@ class FalloRed(Exception):
         self.retry_delay_s = retry_delay_s
 
 
+class EstadoInvalido(RuntimeError):
+    """La operación no es válida para el estado actual del reporte."""
+
+
 class PreparadorContexto(Protocol):
     """
     Fase que corre UNA vez por reporte (no se reintenta): lee la DB,
@@ -82,9 +86,16 @@ class ServicioReportes:
 
     # ── API pública (doc 07) ─────────────────────────────────────────────
 
-    def solicitar_reporte(self, peticion: dict[str, Any]) -> str:
-        """Crea el reporte y lo deja encolado. Devuelve el report_id al instante."""
-        report_id = self.almacen.crear(peticion)
+    def solicitar_reporte(
+        self, peticion: dict[str, Any], solicitado_por: dict[str, Any] | None = None
+    ) -> str:
+        """
+        Crea el reporte y lo deja encolado. Devuelve el report_id al instante.
+
+        solicitado_por: {id, nombre, rol} del usuario que lo pide. El módulo
+        no autentica; confía en lo que le pasa la app principal.
+        """
+        report_id = self.almacen.crear(peticion, solicitado_por=solicitado_por)
         self.almacen.set_estado(report_id, Estado.EN_ESPERA)
         return report_id
 
@@ -92,15 +103,71 @@ class ServicioReportes:
         rep = self.almacen.obtener(report_id)
         return rep.estado if rep else None
 
+    # ── revisión humana del borrador ─────────────────────────────────────
+
+    def obtener_json(self, report_id: str) -> dict[str, Any]:
+        """
+        Devuelve el data_json actual, para que la app lo muestre y edite.
+        Disponible en FINALIZADO (borrador) y APROBADO (sólo lectura).
+        """
+        rep = self._obtener_o_fallar(report_id)
+        if rep.data_json is None:
+            raise EstadoInvalido(f"El reporte {report_id} todavía no tiene JSON (estado={rep.estado})")
+        return rep.data_json
+
+    def guardar_json_editado(self, report_id: str, data_json: dict[str, Any]) -> None:
+        """
+        Reemplaza el JSON con la versión editada por un humano. NO cambia el
+        estado: se puede llamar cuantas veces haga falta mientras sea
+        borrador. El módulo acepta el JSON tal cual: la app controla qué
+        campos deja editar.
+
+        Sólo válido en FINALIZADO. Un APROBADO es inmutable.
+        """
+        rep = self._obtener_o_fallar(report_id)
+        if rep.estado != Estado.FINALIZADO.value:
+            raise EstadoInvalido(
+                f"Sólo se puede editar un borrador finalizado. "
+                f"El reporte {report_id} está en estado '{rep.estado}'."
+            )
+        self.almacen.actualizar_data_json(report_id, data_json)
+
+    def aprobar(self, report_id: str, aprobado_por: dict[str, Any] | None = None) -> None:
+        """
+        Transición FINALIZADO -> APROBADO. Registra quién aprobó.
+        A partir de acá el reporte es inmutable y recién se puede pedir el PDF.
+        """
+        rep = self._obtener_o_fallar(report_id)
+        if rep.estado == Estado.APROBADO.value:
+            raise EstadoInvalido(f"El reporte {report_id} ya está aprobado")
+        if rep.estado != Estado.FINALIZADO.value:
+            raise EstadoInvalido(
+                f"Sólo se aprueba un reporte finalizado. "
+                f"El reporte {report_id} está en estado '{rep.estado}'."
+            )
+        self.almacen.marcar_aprobado(report_id, aprobado_por=aprobado_por)
+
+    # ── obtención del PDF (sólo aprobados) ───────────────────────────────
+
     def obtener_reporte(self, report_id: str) -> bytes:
-        """Reconstruye el PDF desde data_json + grafico_png. No re-llama a la IA."""
+        """
+        Reconstruye el PDF desde data_json + grafico_png. No re-llama a la IA.
+        Sólo disponible para reportes APROBADOS: no existe PDF de un borrador.
+        """
+        rep = self._obtener_o_fallar(report_id)
+        if rep.estado != Estado.APROBADO.value:
+            raise EstadoInvalido(
+                f"El PDF sólo se genera de reportes aprobados. "
+                f"El reporte {report_id} está en estado '{rep.estado}'."
+            )
+        grafico = self.almacen.obtener_grafico(report_id)
+        return self.render_pdf(rep.data_json, grafico)
+
+    def _obtener_o_fallar(self, report_id: str):
         rep = self.almacen.obtener(report_id)
         if rep is None:
             raise KeyError(f"No existe el reporte {report_id}")
-        if rep.estado != Estado.FINALIZADO.value:
-            raise ValueError(f"El reporte {report_id} no está finalizado (estado={rep.estado})")
-        grafico = self.almacen.obtener_grafico(report_id)
-        return self.render_pdf(rep.data_json, grafico)
+        return rep
 
     # ── procesamiento (lo hará el worker; acá se llama a mano) ────────────
 

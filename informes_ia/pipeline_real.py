@@ -41,7 +41,7 @@ log = get_logger(__name__)
 class ContextoReporte:
     """Todo lo que la llamada a la IA necesita, ya pre-procesado UNA vez."""
     resumen: dict[str, Any]
-    asana_txt: list[str]
+    asana_txt: dict[str, list[str]]
     hospital_nombre: str
     pdfs: list[Any]
     tipo_reporte: str
@@ -96,7 +96,8 @@ class PipelineReal:
             raise RespuestaInvalida(f"sin datos: {e}") from e
 
         asana_txt = asana_client.obtener_tareas_asana(
-            self.settings.asana_access_token, config_hospital["asana_id"], fecha_inicio
+            self.settings.asana_access_token, config_hospital["asana_id"],
+            fecha_inicio, fecha_fin,
         )
         pdfs = docs_context.cargar_contexto_persistente(
             self.settings.carpeta_docs, self.settings.cache_file

@@ -20,11 +20,22 @@ class Estado(str, Enum):
     EN_PROCESO = "en_proceso"      # leyendo DB, pre-procesando, armando prompt
     REINTENTANDO = "reintentando"  # falló la IA, reintentando según política
     ERROR = "error"                # terminal: agotó reintentos
-    FINALIZADO = "finalizado"      # terminal: data_json + grafico listos
+    FINALIZADO = "finalizado"      # la IA respondió: JSON = BORRADOR editable
+    APROBADO = "aprobado"          # terminal: un humano revisó y aprobó
 
     @property
     def es_terminal(self) -> bool:
-        return self in (Estado.ERROR, Estado.FINALIZADO)
+        """
+        Terminales = no hay más transiciones automáticas ni manuales.
+        OJO: `finalizado` NO es terminal: espera revisión humana
+        (guardar_json_editado / aprobar). Ver doc 07.
+        """
+        return self in (Estado.ERROR, Estado.APROBADO)
+
+    @property
+    def es_editable(self) -> bool:
+        """Sólo un borrador finalizado admite edición del JSON."""
+        return self is Estado.FINALIZADO
 
 
 class TipoFallo(str, Enum):

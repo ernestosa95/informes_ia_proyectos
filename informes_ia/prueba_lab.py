@@ -25,7 +25,7 @@ from pathlib import Path
 from .config import ConfigError, get_settings
 from .historial.almacen import AlmacenReportes
 from .historial.estados import Estado
-from .historial.servicio import ServicioReportes
+from .historial.servicio import EstadoInvalido, ServicioReportes
 from .logging_utils import get_logger
 from .pipeline_real import PipelineReal
 
@@ -87,8 +87,10 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     # 4. FLUJO: solicitar → (worker simulado) procesar → obtener
+    usuario = {"id": "ernesto", "nombre": "Ernesto", "rol": "admin"}
+
     print(f"\n{'─'*70}\n[1] solicitar_reporte()\n{'─'*70}")
-    report_id = svc.solicitar_reporte(peticion)
+    report_id = svc.solicitar_reporte(peticion, solicitado_por=usuario)
     print(f"  report_id : {report_id}")
     print(f"  estado    : {svc.consultar_estado(report_id)}  (esperado: en_espera)")
 
@@ -107,8 +109,33 @@ def main(argv: list[str] | None = None) -> int:
         print("\n⚠️  El reporte no finalizó. Revisá el error de arriba y los logs.")
         return 1
 
-    # 5. Reconstruir el PDF desde la DB (sin re-llamar a la IA)
-    print(f"\n{'─'*70}\n[4] obtener_reporte()  ← reconstruye PDF desde lo guardado\n{'─'*70}")
+    # 5. Revisión humana: el JSON es un BORRADOR hasta que se apruebe
+    print(f"\n{'─'*70}\n[4] revisión: obtener_json() → (editar) → aprobar()\n{'─'*70}")
+    data = svc.obtener_json(report_id)
+    print(f"  JSON recuperado. Claves: {list(data.keys())}")
+    print(f"  resumen.texto (IA): {str(data.get('resumen', {}).get('texto'))[:70]}...")
+
+    # el PDF todavía no está disponible: es un borrador
+    try:
+        svc.obtener_reporte(report_id)
+        print("  ⚠️  ERROR: no debería dar PDF de un borrador")
+        return 1
+    except EstadoInvalido:
+        print("  PDF de borrador: bloqueado correctamente (falta aprobar)")
+
+    # acá la app principal mostraría el JSON al usuario para editarlo.
+    # Simulamos una corrección de texto:
+    if "resumen" in data:
+        data["resumen"]["texto"] = (data["resumen"].get("texto", "") + " [revisado]")
+        svc.guardar_json_editado(report_id, data)
+        print("  guardar_json_editado(): JSON actualizado (estado no cambia)")
+
+    aprobador = {"id": "sofia", "nombre": "Sofía", "rol": "gerente"}
+    svc.aprobar(report_id, aprobado_por=aprobador)
+    print(f"  aprobar(): estado -> {svc.consultar_estado(report_id)}")
+
+    # 6. Reconstruir el PDF desde la DB (sin re-llamar a la IA)
+    print(f"\n{'─'*70}\n[5] obtener_reporte()  ← reconstruye PDF desde lo guardado\n{'─'*70}")
     pdf_bytes = svc.obtener_reporte(report_id)
     salida = Path(f"prueba_lab_{args.hospital}_{args.tipo}.pdf")
     salida.write_bytes(pdf_bytes)

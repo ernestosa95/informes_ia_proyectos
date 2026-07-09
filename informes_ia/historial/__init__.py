@@ -6,7 +6,7 @@ Ver docs/07-almacenamiento-y-estados.md.
 """
 from .almacen import AlmacenReportes, Reporte
 from .estados import Estado, TipoFallo
-from .servicio import FalloRed, ServicioReportes
+from .servicio import EstadoInvalido, FalloRed, ServicioReportes
 from .validacion import RespuestaInvalida, validar_estructura
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "TipoFallo",
     "ServicioReportes",
     "FalloRed",
+    "EstadoInvalido",
     "RespuestaInvalida",
     "validar_estructura",
 ]

@@ -15,7 +15,7 @@ from typing import Any
 
 from .almacen import AlmacenReportes
 from .estados import Estado
-from .servicio import FalloRed, ServicioReportes
+from .servicio import EstadoInvalido, FalloRed, ServicioReportes
 from .validacion import RespuestaInvalida
 
 
@@ -56,16 +56,35 @@ def main() -> int:
     }
 
     # ── Caso 1: camino feliz ─────────────────────────────────────────────
-    _sep("CASO 1 — Camino feliz (solicitar → procesar → obtener)")
+    _sep("CASO 1 — Camino feliz (solicitar → procesar → editar → aprobar → obtener)")
     svc = ServicioReportes(almacen, _json_completo, render_pdf=_render_fake)
-    rid = svc.solicitar_reporte(peticion_base)
+    usuario = {"id": "ernesto", "nombre": "Ernesto", "rol": "admin"}
+    rid = svc.solicitar_reporte(peticion_base, solicitado_por=usuario)
     print(f"solicitar_reporte() devolvió id inmediato: {rid}")
     print(f"estado tras solicitar: {svc.consultar_estado(rid)}  (esperado: en_espera)")
     svc.procesar(rid)
-    print(f"estado tras procesar:  {svc.consultar_estado(rid)}  (esperado: finalizado)")
+    print(f"estado tras procesar:  {svc.consultar_estado(rid)}  (esperado: finalizado = BORRADOR)")
+    assert svc.consultar_estado(rid) == Estado.FINALIZADO.value
+
+    # el PDF todavía NO se puede pedir: es un borrador sin aprobar
+    try:
+        svc.obtener_reporte(rid)
+        print("ERROR: no debería dar PDF de un borrador")
+        return 1
+    except EstadoInvalido:
+        print("obtener_reporte() sobre borrador -> bloqueado correctamente")
+
+    # revisión humana: se edita el JSON y se aprueba
+    data = svc.obtener_json(rid)
+    data["resumen"]["texto"] = "Texto revisado por un humano."
+    svc.guardar_json_editado(rid, data)
+    print(f"estado tras editar:    {svc.consultar_estado(rid)}  (no cambia: sigue finalizado)")
+    svc.aprobar(rid, aprobado_por={"id": "sofia", "nombre": "Sofía", "rol": "gerente"})
+    print(f"estado tras aprobar:   {svc.consultar_estado(rid)}  (esperado: aprobado)")
+
     pdf = svc.obtener_reporte(rid)
     print(f"obtener_reporte() reconstruyó PDF: {pdf!r}")
-    assert svc.consultar_estado(rid) == Estado.FINALIZADO.value
+    assert svc.consultar_estado(rid) == Estado.APROBADO.value
     assert b"P03" in pdf and b"grafico=s" in pdf
 
     # ── Caso 2: fallo de red que se recupera al 3er intento ──────────────
@@ -117,14 +136,25 @@ def main() -> int:
     assert "respuesta_invalida" in rep4.error_mensaje
     assert "recomendacion" in rep4.error_mensaje
 
-    # ── Caso 5: obtener_reporte sobre uno no finalizado → error controlado ─
-    _sep("CASO 5 — obtener_reporte() sobre uno en error → ValueError controlado")
+    # ── Caso 5: obtener_reporte sobre uno en error → error controlado ────
+    _sep("CASO 5 — obtener_reporte() sobre uno en error → EstadoInvalido controlado")
     try:
         svc4.obtener_reporte(rid4)
         print("ERROR: debería haber lanzado")
         return 1
-    except ValueError as e:
-        print(f"lanzó ValueError esperado: {e}")
+    except EstadoInvalido as e:
+        print(f"lanzó EstadoInvalido esperado: {e}")
+
+    # ── Caso 6: editar/aprobar un reporte en error → bloqueado ───────────
+    _sep("CASO 6 — editar y aprobar un reporte en ERROR → bloqueados")
+    for op, fn in (("guardar_json_editado", lambda: svc4.guardar_json_editado(rid4, {})),
+                   ("aprobar", lambda: svc4.aprobar(rid4))):
+        try:
+            fn()
+            print(f"ERROR: {op} debería haber fallado")
+            return 1
+        except EstadoInvalido as e:
+            print(f"{op}() bloqueado correctamente: {e}")
 
     # ── Historial ────────────────────────────────────────────────────────
     _sep("HISTORIAL — todos los reportes registrados")

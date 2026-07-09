@@ -70,7 +70,7 @@ def _contar_incidentes_internos(resumen: dict[str, Any]) -> int:
 
 def _construir_prompt(
     resumen: dict[str, Any],
-    asana_txt: list[str],
+    asana_casos: dict[str, list[str]],
     hospital_nombre: str,
     tipo_reporte: str,
 ) -> str:
@@ -84,6 +84,13 @@ def _construir_prompt(
     incidentes_internos = _contar_incidentes_internos(resumen)
     resumen_json = json.dumps(resumen, ensure_ascii=False, default=str)
 
+    humanos = asana_casos.get("humanos", [])
+    automaticos = asana_casos.get("automaticos", [])
+    n_humanos = len(humanos)
+
+    bloque_humanos = "\n\n".join(humanos) if humanos else "(sin casos de gestión en el período)"
+    bloque_automaticos = "\n".join(automaticos) if automaticos else "(ninguno)"
+
     return f"""
     ACTÚA COMO UN {perfil.rol} DE "TECNOMONITOR".
     Genera el JSON para el reporte {tipo_reporte} de {hospital_nombre}.
@@ -95,7 +102,19 @@ def _construir_prompt(
 
     {resumen_json}
 
-    Tickets de usuario (Asana) del período: {len(asana_txt)} ({asana_txt})
+    ── CASOS DE GESTIÓN (Asana, escritos por personas) ──
+    Son pedidos, seguimientos y gestiones reales del cliente/equipo. ESTE es
+    el contexto de negocio relevante. Hay {n_humanos} en el período:
+
+    {bloque_humanos}
+
+    ── INCIDENTES AUTOGESTIONADOS (Asana, generados por TecnoMonitor) ──
+    Tickets que el propio sistema abrió y cerró automáticamente. YA están
+    reflejados en el resumen de infraestructura de arriba — NO los cuentes
+    como reclamos del cliente ni los dupliques en el análisis. Se listan
+    sólo como referencia de que el monitoreo actuó:
+
+    {bloque_automaticos}
 
     INSTRUCCIONES ESPECÍFICAS:
     {perfil.instrucciones}
@@ -105,7 +124,7 @@ def _construir_prompt(
         "meta": {{ "tipo": "{tipo_reporte}", "fecha": "{datetime.now().strftime('%d/%m/%Y')}", "hospital": "{hospital_nombre}" }},
         "resumen": {{ "uptime": "{uptime}", "texto": "..." }},
         "infraestructura": {{ "energia": "...", "termica": "...", "mensaje": "..." }},
-        "incidencias": {{ "externas": {len(asana_txt)}, "internas": {incidentes_internos}, "analisis": "..." }},
+        "incidencias": {{ "externas": {n_humanos}, "internas": {incidentes_internos}, "analisis": "..." }},
         "calidad": {{ "estabilidad": "...", "caso_destacado": "..." }},
         "recomendacion": "..."
     }}
@@ -114,7 +133,7 @@ def _construir_prompt(
 
 def generar_json_con_ia(
     resumen: dict[str, Any],
-    asana_txt: list[str],
+    asana_casos: dict[str, list[str]],
     hospital_nombre: str,
     pdfs: list[Any],
     tipo_reporte: str,
@@ -122,7 +141,7 @@ def generar_json_con_ia(
 ) -> dict[str, Any] | None:
     log.info("Generando JSON del informe (%s) con modelo %s", tipo_reporte, model_name)
 
-    prompt = _construir_prompt(resumen, asana_txt, hospital_nombre, tipo_reporte)
+    prompt = _construir_prompt(resumen, asana_casos, hospital_nombre, tipo_reporte)
     model = genai.GenerativeModel(
         model_name, generation_config={"response_mime_type": "application/json"}
     )
