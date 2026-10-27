@@ -1,7 +1,10 @@
 """
 Normaliza un snapshot de `reportes_historicos.full_json_data` a una forma
-única, sin importar la versión de schema (vimos 4.0 y 4.3 con diferencias
-reales: `storage` vs `storage_layer`, `network_health` ausente en 4.0, etc.).
+única, sin importar la versión de schema. Las rutas son las del agente
+(`agent_logic.py`) y las mismas que lee el motor de alertas del server
+(`alerts_engine/infra.py`): sensores, energía, RAID y red van dentro de
+`physical_layer`. Las ubicaciones de nivel superior se aceptan como
+alternativa para esquemas viejos.
 
 Todo lo que sigue en el pipeline (event_tracker.py) consume `SnapshotNormalizado`,
 nunca el JSON crudo directamente, así que agregar una v4.4 mañana implica
@@ -78,6 +81,12 @@ class SnapshotNormalizado:
 
     suitestensa_new_alerts: int | None
 
+    # Igual que el motor de alertas del server (alerts_engine/infra.py):
+    # volúmenes lógicos y discos físicos del iDRAC, y ventiladores.
+    volumenes_raid: list[dict[str, Any]] = field(default_factory=list)
+    discos_fisicos: list[dict[str, Any]] = field(default_factory=list)
+    ventiladores: list[Sensor] = field(default_factory=list)
+
 
 def _get(d: Any, *path, default=None):
     """Navega dicts anidados de forma segura, tolerando None en cualquier nivel."""
@@ -100,19 +109,34 @@ def parse_snapshot(raw: dict[str, Any]) -> SnapshotNormalizado:
     cpu_host = _get(physical, "telemetry", "cpu", "usage_percent")
     ram_host = _get(physical, "telemetry", "ram", "usage_percent")
 
+    # El agente pone sensores, almacenamiento y red DENTRO de physical_layer
+    # (agent_logic.py; así los lee también el motor de alertas del server). Las
+    # ubicaciones de nivel superior quedan como alternativa para esquemas viejos.
     sensores = [
-        Sensor(nombre=t.get("name", "?"), valor=t.get("value", 0), status=t.get("status", "?"))
+        Sensor(nombre=t.get("name") or "?", valor=t.get("value") or 0, status=t.get("status") or "?")
         for t in _get(physical, "sensors", "temperatures", default=[])
+        if t.get("value") is not None
     ]
 
+    ventiladores = [
+        Sensor(nombre=f.get("name") or "?", valor=f.get("value") or 0, status=f.get("status") or "?")
+        for f in _get(physical, "sensors", "fans", default=[])
+    ]
+
+    supplies = _get(physical, "sensors", "power", "supplies", default=None)
+    if supplies is None:
+        supplies = _get(physical, "power", "supplies", default=[])
     fuentes_poder = [
-        FuentePoder(nombre=p.get("name", "?"), watts=p.get("watts", 0.0), status=p.get("status", "?"))
-        for p in _get(physical, "power", "supplies", default=[])
+        FuentePoder(nombre=p.get("name") or "?", watts=p.get("watts") or 0.0, status=p.get("status") or "?")
+        for p in supplies
     ]
 
-    # `storage` (schema 4.3) vs `storage_layer` (schema 4.0)
-    storage_block = raw.get("storage") or raw.get("storage_layer") or {}
+    storage_block = (
+        physical.get("storage_layer") or raw.get("storage_layer") or raw.get("storage") or {}
+    )
     controladores_raid = storage_block.get("controllers", []) or []
+    volumenes_raid = storage_block.get("logical_volumes", []) or []
+    discos_fisicos = storage_block.get("physical_drives", []) or []
 
     nodos_virtuales = []
     for nodo in raw.get("virtual_layer", []) or []:
@@ -148,7 +172,7 @@ def parse_snapshot(raw: dict[str, Any]) -> SnapshotNormalizado:
             )
         )
 
-    network = raw.get("network_health") or {}
+    network = physical.get("network_health") or raw.get("network_health") or {}
 
     suitestensa_alerts = _get(raw, "collection_meta", "suitestensa_logs", "new_alerts")
 
@@ -165,4 +189,7 @@ def parse_snapshot(raw: dict[str, Any]) -> SnapshotNormalizado:
         network_latency_ms=network.get("cloud_latency_ms"),
         network_status=network.get("cloud_status"),
         suitestensa_new_alerts=suitestensa_alerts,
+        volumenes_raid=volumenes_raid,
+        discos_fisicos=discos_fisicos,
+        ventiladores=ventiladores,
     )

@@ -1,97 +1,100 @@
 """
 Módulo 2: Datos SQL.
 
-Este módulo sólo lee de SQLite, no interpreta ni agrega nada — la
-agregación vive en event_tracker.py / backlog_analyzer.py / software_auditor.py
-(ver preprocess.py, que orquesta los tres). Expone:
+Este módulo sólo lee de la base de TecnoMonitor (Postgres o SQLite, ver
+conexion.py), no interpreta ni agrega nada — la agregación vive en
+event_tracker.py / backlog_analyzer.py / software_auditor.py (ver
+preprocess.py, que orquesta los tres). Expone:
 
 - obtener_config_hospital: metadata básica (nombre, proyecto Asana)
-- generar_grafico_historico: PNG de CPU/RAM en el rango pedido
+- generar_grafico_historico: PNG de CPU/RAM del host en el rango pedido
 - obtener_historial_crudo / obtener_uso_crudo / obtener_software_crudo:
   fetchers crudos de las 3 tablas de telemetría/uso/software
+
+`fuente` es una URL de SQLAlchemy o la ruta a un archivo SQLite
+(conexion.get_engine).
 """
 from __future__ import annotations
 
-import json
-import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")  # sin display: corre en el server/worker
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from dateutil import parser
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
+from .conexion import a_datetime, get_engine, json_escalar
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
 
 
-def _conectar(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
-        raise FileNotFoundError(f"No se encontró la base de datos en {db_path}")
-    return sqlite3.connect(db_path)
-
-
-def obtener_config_hospital(db_path: Path, hospital_id: str) -> dict[str, Any] | None:
-    with _conectar(db_path) as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute(
-                "SELECT nombre, asana_project_id FROM hospitales_metadata WHERE hospital_id = ?",
-                (hospital_id,),
-            )
-            res = cursor.fetchone()
-        except sqlite3.Error:
-            log.exception("Error consultando metadata del hospital %s", hospital_id)
-            return None
+def obtener_config_hospital(fuente: str | Path, hospital_id: str) -> dict[str, Any] | None:
+    engine = get_engine(fuente)
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(
+                text("SELECT nombre, asana_project_id FROM hospitales_metadata WHERE hospital_id = :h"),
+                {"h": hospital_id},
+            ).fetchone()
+    except SQLAlchemyError:
+        log.exception("Error consultando metadata del hospital %s", hospital_id)
+        return None
     return {"nombre": res[0], "asana_id": res[1]} if res else None
 
 
 def generar_grafico_historico(
-    db_path: Path, hospital_id: str, inicio: str, fin: str, ruta_salida: Path
+    fuente: str | Path, hospital_id: str, inicio: str, fin: str, ruta_salida: Path
 ) -> Path | None:
+    """
+    CPU y RAM del host, en %. La RAM sale de `physical_layer.telemetry.ram.usage_percent`
+    del JSON: la columna `host_ram_usage` del server guarda GB usados, no porcentaje.
+    Sólo se extraen esos escalares en SQL, sin traer el JSON completo de cada fila.
+    """
     log.info("Generando gráfico histórico para %s (%s a %s)", hospital_id, inicio, fin)
+    engine = get_engine(fuente)
+    ram_pct = json_escalar(engine, "full_json_data", "physical_layer", "telemetry", "ram", "usage_percent")
 
-    with _conectar(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT timestamp, host_cpu_usage, host_ram_usage, full_json_data
-               FROM reportes_historicos
-               WHERE hospital_id = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC""",
-            (hospital_id, inicio, fin),
-        )
-        rows = cursor.fetchall()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(f"""SELECT timestamp, host_cpu_usage, {ram_pct} AS ram_pct
+                     FROM reportes_historicos
+                     WHERE hospital_id = :h AND timestamp BETWEEN :ini AND :fin
+                     ORDER BY timestamp ASC"""),
+            {"h": hospital_id, "ini": inicio, "fin": fin},
+        ).fetchall()
 
     if not rows:
         log.warning("Sin datos históricos para %s en el rango pedido", hospital_id)
         return None
 
-    fechas, cpu_pct, ram_pct = [], [], []
-    total_ram_gb = 16.0
-    try:
-        last_json = json.loads(rows[-1][3])
-        total_ram_gb = last_json.get("physical_host", {}).get("ram_total_gb", 16.0)
-    except (json.JSONDecodeError, TypeError, KeyError):
-        log.debug("No se pudo leer ram_total_gb del último registro, se usa default 16GB")
-
-    for r in rows:
-        try:
-            dt = parser.parse(r[0])
-            fechas.append(dt)
-            cpu_pct.append(r[1] if r[1] else 0)
-            ram_pct.append(((r[2] if r[2] else 0) / total_ram_gb) * 100)
-        except (ValueError, TypeError, ZeroDivisionError):
+    fechas: list[datetime] = []
+    serie_cpu: list[float | None] = []
+    serie_ram: list[float | None] = []
+    for ts, cpu, ram in rows:
+        dt = a_datetime(ts)
+        if dt is None:
             continue
+        fechas.append(dt)
+        serie_cpu.append(float(cpu) if cpu is not None else None)
+        serie_ram.append(float(ram) if ram is not None else None)
 
     if not fechas:
         return None
 
     plt.style.use("bmh")
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(fechas, cpu_pct, label="CPU (%)", color="#3498db", linewidth=2)
-    ax.fill_between(fechas, cpu_pct, color="#3498db", alpha=0.1)
-    ax.plot(fechas, ram_pct, label="RAM (%)", color="#27ae60", linewidth=2)
+    # None = punto sin dato: matplotlib corta la línea ahí en vez de dibujar un 0.
+    cpu_plot = [float("nan") if v is None else v for v in serie_cpu]
+    ram_plot = [float("nan") if v is None else v for v in serie_ram]
+    ax.plot(fechas, cpu_plot, label="CPU (%)", color="#3498db", linewidth=2)
+    ax.fill_between(fechas, cpu_plot, color="#3498db", alpha=0.1)
+    ax.plot(fechas, ram_plot, label="RAM (%)", color="#27ae60", linewidth=2)
     ax.axhline(y=90, color="#e74c3c", linestyle="--", linewidth=1, label="Crítico")
     ax.set_xlim(min(fechas), max(fechas))
     ax.set_ylim(0, 100)
@@ -111,59 +114,62 @@ def generar_grafico_historico(
 
 
 def obtener_historial_crudo(
-    db_path: Path, hospital_id: str, inicio: str, fin: str
-) -> list[tuple[str, str | None]]:
+    fuente: str | Path, hospital_id: str, inicio: str, fin: str
+) -> list[tuple[Any, str | None, Any]]:
     """
     Filas crudas de `reportes_historicos` para alimentar EventTracker
-    (informes_ia.event_tracker). Devuelve (full_json_data, host_status)
-    ordenado por timestamp ascendente.
+    (informes_ia.event_tracker). Devuelve (full_json_data, host_status, timestamp)
+    ordenado por timestamp ascendente. full_json_data puede venir como dict
+    (Postgres) o texto (SQLite); el timestamp, como datetime o texto.
     """
-    with _conectar(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT full_json_data, host_status FROM reportes_historicos
-               WHERE hospital_id = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC""",
-            (hospital_id, inicio, fin),
-        )
-        return cursor.fetchall()
+    with get_engine(fuente).connect() as conn:
+        return [
+            tuple(r)
+            for r in conn.execute(
+                text("""SELECT full_json_data, host_status, timestamp FROM reportes_historicos
+                        WHERE hospital_id = :h AND timestamp BETWEEN :ini AND :fin
+                        ORDER BY timestamp ASC"""),
+                {"h": hospital_id, "ini": inicio, "fin": fin},
+            )
+        ]
 
 
 def obtener_uso_crudo(
-    db_path: Path, hospital_id: str, inicio: str, fin: str
-) -> list[tuple[str, str]]:
+    fuente: str | Path, hospital_id: str, inicio: str, fin: str
+) -> list[tuple[str, Any]]:
     """
     Filas crudas de `reportes_uso` para alimentar BacklogAnalyzer
     (informes_ia.backlog_analyzer). Devuelve (kpi_json_data, timestamp)
     ordenado por timestamp ascendente.
     """
-    with _conectar(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT kpi_json_data, timestamp FROM reportes_uso
-               WHERE hospital_id = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC""",
-            (hospital_id, inicio, fin),
-        )
-        return cursor.fetchall()
+    with get_engine(fuente).connect() as conn:
+        return [
+            tuple(r)
+            for r in conn.execute(
+                text("""SELECT kpi_json_data, timestamp FROM reportes_uso
+                        WHERE hospital_id = :h AND timestamp BETWEEN :ini AND :fin
+                        ORDER BY timestamp ASC"""),
+                {"h": hospital_id, "ini": inicio, "fin": fin},
+            )
+        ]
 
 
 def obtener_software_crudo(
-    db_path: Path, hospital_id: str, inicio: str, fin: str
+    fuente: str | Path, hospital_id: str, inicio: str, fin: str
 ) -> list[dict[str, Any]]:
     """
     Filas crudas de `software_monitoring` para alimentar SoftwareAuditor
     (informes_ia.software_auditor). Devuelve dicts con las columnas
     nombradas, ordenado por timestamp ascendente.
     """
-    with _conectar(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute(
-            """SELECT app_name, component_id, status_value, metric_value, extra_data, timestamp
-               FROM software_monitoring
-               WHERE hospital_id = ? AND timestamp BETWEEN ? AND ?
-               ORDER BY timestamp ASC""",
-            (hospital_id, inicio, fin),
-        )
-        return [dict(row) for row in cursor.fetchall()]
+    with get_engine(fuente).connect() as conn:
+        return [
+            dict(r._mapping)
+            for r in conn.execute(
+                text("""SELECT app_name, component_id, status_value, metric_value, extra_data, timestamp
+                        FROM software_monitoring
+                        WHERE hospital_id = :h AND timestamp BETWEEN :ini AND :fin
+                        ORDER BY timestamp ASC"""),
+                {"h": hospital_id, "ini": inicio, "fin": fin},
+            )
+        ]

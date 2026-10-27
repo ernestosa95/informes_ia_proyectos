@@ -5,38 +5,40 @@ SoftwareAuditor: procesa `software_monitoring`, una tabla EAV donde
 - ssl_certificate: metric_value = días restantes de un certificado.
 - elasticsearch: alertas de logs de SUITESTENSA con severidad (LOW/MEDIUM/
   HIGH/WARNING) y un conteo (metric_value).
-- mirth: estado de canales del motor de integración HL7 (STARTED/STOPPED)
-  con contadores de mensajes recibidos/enviados.
+- mirth: una fila por canal (component_id = "[INSTANCIA] canal") con su
+  estado (STARTED/STOPPED/...), la cola actual en metric_value (`queued`) y
+  en extra_data los contadores acumulados recibidos/enviados/errored desde que
+  arrancó el canal (main.py del server).
 
 TODOs abiertos (documentados, sin resolver todavía — ver README):
 - No confirmado si `elasticsearch.metric_value` es un conteo acumulado
   desde que existe la alerta, o una ventana rodante. Por ahora reportamos
   el ÚLTIMO valor visto en el período + el máximo, para no asumir de más.
-- No confirmado cómo calcular la cola pendiente de Mirth (no hay un campo
-  explícito de "queued"). Por ahora aproximamos backlog = recibidos -
-  enviados del ÚLTIMO snapshot del canal en el período.
 - No existe una clave `ssl_expiration_warning_days` en `configuracion`;
   usamos `ConfiguracionGlobal.ssl_warning_days` (default 30) hasta que se
   defina un valor oficial.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
+from .conexion import a_dict
 from .config_dinamica import ConfiguracionGlobal
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
 
 
-def _parse_extra(extra_data: str | None) -> dict[str, Any]:
-    if not extra_data:
-        return {}
+def _parse_extra(extra_data: Any) -> dict[str, Any]:
+    """extra_data llega como dict (Postgres) o como texto JSON (SQLite)."""
+    return a_dict(extra_data) or {}
+
+
+def _entero(valor: Any) -> int:
     try:
-        return json.loads(extra_data)
-    except (json.JSONDecodeError, TypeError):
-        return {}
+        return int(valor or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 _ORDEN_SEVERIDAD = {"LOW": 0, "WARNING": 1, "MEDIUM": 2, "HIGH": 3}
@@ -90,14 +92,31 @@ def analizar_software(
                     actual["severidad_max"] = fila.get("status_value")
 
         elif app_name == "mirth":
-            canal = extra.get("instancia") or fila.get("component_id", "?")
-            canales_mirth[canal] = {
-                "canal": canal,
-                "estado": fila.get("status_value"),
-                "recibidos": extra.get("recibidos", 0),
-                "enviados": extra.get("enviados", 0),
-                "last_error": extra.get("last_error") or None,
-            }
+            # Clave = canal. Antes era la instancia y todos los canales de una
+            # instancia se pisaban entre sí (quedaba uno solo).
+            canal = fila.get("component_id") or "?"
+            cola = _entero(fila.get("metric_value"))
+            errored = _entero(extra.get("errored"))
+            c = canales_mirth.get(canal)
+            if c is None:
+                c = canales_mirth[canal] = {
+                    "canal": canal,
+                    "instancia": extra.get("instancia"),
+                    "cola_maxima_periodo": cola,
+                    "errores_en_periodo": 0,
+                    "_errored_anterior": errored,
+                }
+            else:
+                # errored es acumulado desde que arrancó el canal: se suma lo que
+                # crece; si baja, el canal se reinició y el valor nuevo es todo nuevo.
+                delta = errored - c["_errored_anterior"]
+                c["errores_en_periodo"] += delta if delta >= 0 else errored
+                c["_errored_anterior"] = errored
+                c["cola_maxima_periodo"] = max(c["cola_maxima_periodo"], cola)
+            c["estado"] = fila.get("status_value")
+            c["cola_actual"] = cola
+            c["ultimo_error"] = extra.get("last_error") or None
+            c["ultima_lectura"] = str(fila.get("timestamp"))
 
         else:
             log.debug("app_name desconocido en software_monitoring: %s", app_name)
@@ -110,10 +129,11 @@ def analizar_software(
 
     canales_con_problema = []
     for c in canales_mirth.values():
-        backlog_aprox = (c["recibidos"] or 0) - (c["enviados"] or 0)
-        c["backlog_aproximado"] = backlog_aprox
-        if (c["estado"] != "STARTED") or (
-            config.mirth.enabled and backlog_aprox > config.mirth.queued_threshold
+        c.pop("_errored_anterior", None)
+        if (
+            (c["estado"] or "").upper() != "STARTED"
+            or c["cola_maxima_periodo"] > config.mirth.queued_threshold
+            or c["errores_en_periodo"] > 0
         ):
             canales_con_problema.append(c)
 
@@ -136,6 +156,6 @@ def analizar_software(
         "canales_mirth": {
             "total_canales": len(canales_mirth),
             "con_problema": canales_con_problema,
-            "umbral_backlog": config.mirth.queued_threshold,
+            "umbral_cola": config.mirth.queued_threshold,
         },
     }

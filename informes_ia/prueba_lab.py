@@ -52,15 +52,15 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         log.error("Config: %s", e)
         return 1
-    if not settings.db_path.exists():
-        log.error("No se encontró lab_monitor.db en %s", settings.db_path)
+    if "://" not in settings.database_url and not settings.db_path.exists():
+        log.error("No se encontró lab_monitor.db en %s (o definir DATABASE_URL)", settings.db_path)
         return 1
 
     print(f"\n{'='*70}\nPRUEBA DE FLUJO COMPLETO — LAB\n{'='*70}")
     print(f"  hospital     : {args.hospital}")
     print(f"  rango        : {args.desde}  →  {args.hasta}")
     print(f"  tipo         : {args.tipo}")
-    print(f"  base datos   : {settings.db_path}")
+    print(f"  base datos   : {settings.database_url.split('@')[-1]}")  # sin usuario/clave
     print(f"  db historial : {args.db_historial}")
 
     # 2. Montar la capa async con el pipeline REAL inyectado

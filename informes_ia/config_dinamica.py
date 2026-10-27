@@ -8,10 +8,12 @@ no la tabla cruda.
 """
 from __future__ import annotations
 
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import text
+
+from .conexion import get_engine
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -23,13 +25,9 @@ def _split_csv(valor: str | None) -> list[str]:
     return [v.strip() for v in valor.split(",") if v.strip()]
 
 
-def _leer_tabla_kv(db_path: Path, tabla: str = "configuracion") -> dict[str, str]:
-    if not db_path.exists():
-        raise FileNotFoundError(f"No se encontró la base de datos en {db_path}")
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(f"SELECT clave, valor FROM {tabla}")
-        return {clave: valor for clave, valor in cursor.fetchall()}
+def _leer_tabla_kv(fuente: str | Path, tabla: str = "configuracion") -> dict[str, str]:
+    with get_engine(fuente).connect() as conn:
+        return {clave: valor for clave, valor in conn.execute(text(f"SELECT clave, valor FROM {tabla}"))}
 
 
 @dataclass(frozen=True)
@@ -83,8 +81,8 @@ class ConfiguracionGlobal:
     ssl_warning_days: int = field(default=30)
 
     @staticmethod
-    def cargar(db_path: Path) -> "ConfiguracionGlobal":
-        raw = _leer_tabla_kv(db_path)
+    def cargar(fuente: str | Path) -> "ConfiguracionGlobal":
+        raw = _leer_tabla_kv(fuente)
 
         faltantes = [
             k
@@ -110,7 +108,7 @@ class ConfiguracionGlobal:
             return (v == "1") if v is not None else default
 
         return ConfiguracionGlobal(
-            offline_minutes=_int("offline_minutes", 30),
+            offline_minutes=_int("offline_minutes", 15),
             disk_threshold=_int("disk_threshold", 90),
             temp_amb_max=_int("temp_amb_max", 27),
             temp_cpu_max=_int("temp_cpu_max", 75),
@@ -141,5 +139,5 @@ class ConfiguracionGlobal:
         )
 
 
-def get_configuracion(db_path: Path) -> ConfiguracionGlobal:
-    return ConfiguracionGlobal.cargar(db_path)
+def get_configuracion(fuente: str | Path) -> ConfiguracionGlobal:
+    return ConfiguracionGlobal.cargar(fuente)

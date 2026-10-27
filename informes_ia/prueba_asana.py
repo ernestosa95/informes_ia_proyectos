@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Resolver el project_id del hospital desde hospitales_metadata
-    config_hospital = db.obtener_config_hospital(settings.db_path, args.hospital)
+    config_hospital = db.obtener_config_hospital(settings.database_url, args.hospital)
     if not config_hospital:
         print(f"\n⚠️  Hospital '{args.hospital}' no está en hospitales_metadata.\n")
         return 1

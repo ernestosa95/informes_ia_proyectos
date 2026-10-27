@@ -83,14 +83,14 @@ class PipelineReal:
         fecha_fin = peticion["fecha_fin"]
         tipo_reporte = peticion.get("tipo_reporte", "cliente")
 
-        config_hospital = db.obtener_config_hospital(self.settings.db_path, hospital_id)
+        config_hospital = db.obtener_config_hospital(self.settings.database_url, hospital_id)
         if not config_hospital:
             raise RespuestaInvalida(f"hospital '{hospital_id}' no está en hospitales_metadata")
 
-        config_dinamica = get_configuracion(self.settings.db_path)
+        config_dinamica = get_configuracion(self.settings.database_url)
         try:
             resumen = preprocess.generar_resumen(
-                self.settings.db_path, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
+                self.settings.database_url, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
             )
         except preprocess.SinDatosParaElPeriodo as e:
             raise RespuestaInvalida(f"sin datos: {e}") from e
@@ -139,7 +139,7 @@ class PipelineReal:
         with tempfile.TemporaryDirectory() as td:
             ruta = Path(td) / "grafico.png"
             resultado = db.generar_grafico_historico(
-                self.settings.db_path, hospital_id,
+                self.settings.database_url, hospital_id,
                 peticion["fecha_inicio"], peticion["fecha_fin"], ruta,
             )
             if resultado is None or not ruta.exists():

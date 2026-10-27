@@ -27,6 +27,9 @@ class Settings:
     gemini_model_json: str
 
     db_path: Path
+    # Base de TecnoMonitor de la que se leen los datos: URL de Postgres
+    # (DATABASE_URL, como en el server) o, si no está, el archivo SQLite db_path.
+    database_url: str
     cache_file: Path
     carpeta_docs: Path
     carpeta_reportes: Path
@@ -41,13 +44,15 @@ class Settings:
             )
 
         base_dir = Path(os.getenv("INFORMES_IA_BASE_DIR", ".")).resolve()
+        db_path = base_dir / os.getenv("DB_FILENAME", "lab_monitor.db")
 
         return Settings(
             gemini_api_key=gemini_api_key,
             asana_access_token=os.getenv("ASANA_ACCESS_TOKEN"),  # opcional
             gemini_model_json=os.getenv("GEMINI_MODEL_JSON", "gemini-flash-latest"),
             gemini_model_datos=os.getenv("GEMINI_MODEL_DATOS", "gemini-flash-latest"),
-            db_path=base_dir / os.getenv("DB_FILENAME", "lab_monitor.db"),
+            db_path=db_path,
+            database_url=os.getenv("DATABASE_URL") or str(db_path),
             cache_file=base_dir / os.getenv("CACHE_FILENAME", "docs_cache.json"),
             carpeta_docs=base_dir / os.getenv("DOCS_DIRNAME", "docs"),
             carpeta_reportes=base_dir / os.getenv("REPORTES_DIRNAME", "reportes"),

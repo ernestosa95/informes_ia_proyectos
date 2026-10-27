@@ -31,14 +31,15 @@ class SinDatosParaElPeriodo(RuntimeError):
 
 
 def generar_resumen(
-    db_path: Path,
+    fuente: str | Path,
     hospital_id: str,
     fecha_inicio: str,
     fecha_fin: str,
     config: ConfiguracionGlobal | None = None,
 ) -> dict[str, Any]:
     """
-    Punto de entrada unico del pre-procesamiento. Lee las 3 tablas para el
+    Punto de entrada unico del pre-procesamiento. `fuente` es la URL de la
+    base (Postgres) o la ruta al SQLite (ver conexion.py). Lee las 3 tablas para el
     hospital y rango pedidos, corre los 3 analizadores, y devuelve el dict
     compacto listo para pasarle a la IA.
 
@@ -46,11 +47,11 @@ def generar_resumen(
     (una fuente individual ausente, ej. un hospital sin canales Mirth, es
     normal y no corta el proceso).
     """
-    config = config or get_configuracion(db_path)
+    config = config or get_configuracion(fuente)
 
-    filas_historial = db.obtener_historial_crudo(db_path, hospital_id, fecha_inicio, fecha_fin)
-    filas_uso = db.obtener_uso_crudo(db_path, hospital_id, fecha_inicio, fecha_fin)
-    filas_software = db.obtener_software_crudo(db_path, hospital_id, fecha_inicio, fecha_fin)
+    filas_historial = db.obtener_historial_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
+    filas_uso = db.obtener_uso_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
+    filas_software = db.obtener_software_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
 
     if not filas_historial and not filas_uso and not filas_software:
         raise SinDatosParaElPeriodo(
@@ -63,7 +64,10 @@ def generar_resumen(
         hospital_id, len(filas_historial), len(filas_uso), len(filas_software),
     )
 
-    infra = event_tracker.analizar_historial(filas_historial, config) if filas_historial else None
+    infra = (
+        event_tracker.analizar_historial(filas_historial, config, fecha_inicio, fecha_fin)
+        if filas_historial else None
+    )
     clinico = backlog_analyzer.analizar_uso(filas_uso, config) if filas_uso else None
     software = software_auditor.analizar_software(filas_software, config) if filas_software else None
 

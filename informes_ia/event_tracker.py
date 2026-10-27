@@ -12,14 +12,23 @@ desde el diseño, no parcheado después.
 
 Los umbrales se reciben desde `ConfiguracionGlobal` (tabla `configuracion`),
 nunca hardcodeados.
+
+UPTIME = COBERTURA EN EL TIEMPO. Es el % del período en que el hospital
+estuvo reportando: un hueco entre dos reportes (o al principio/fin del
+período) mayor que `offline_minutes` cuenta entero como caída, el mismo
+umbral con el que el server declara un hospital OFFLINE. Antes se contaban
+las filas con host_status == "online", pero esa columna guarda el estado de
+salud del iDRAC ("OK", "Warning"...): el uptime daba siempre 0 % y la IA lo
+"explicaba" inventando causas (informe de P03, 2026-07).
 """
 from __future__ import annotations
 
-import json
+from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
+from .conexion import a_datetime, a_dict
 from .config_dinamica import ConfiguracionGlobal
 from .logging_utils import get_logger
 from .normalizacion import SnapshotNormalizado, parse_snapshot
@@ -103,6 +112,7 @@ class EventTracker:
             "ram_vm_alto": _RastreadorUmbral("ram_vm_alto", "baja"),
             "disco_lleno": _RastreadorUmbral("disco_lleno", "alta"),
             "fuente_poder_fallo": _RastreadorUmbral("fuente_poder_fallo", "alta"),
+            "ventilador_fallo": _RastreadorUmbral("ventilador_fallo", "alta"),
             "raid_degradado": _RastreadorUmbral("raid_degradado", "alta"),
             "nodo_offline": _RastreadorUmbral("nodo_offline", "alta"),
         }
@@ -113,24 +123,32 @@ class EventTracker:
         self._muestras_temp_cpu: list[float] = []
         self._muestras_latencia: list[float] = []
         self._total_snapshots = 0
-        self._snapshots_online = 0
         self._alertas_suitestensa_max = 0
+        # Hora de cada reporte según la base (la que usa el server), para la cobertura.
+        self._horas_reporte: list[datetime] = []
+        # Por VM / equipo: [muestras online, muestras totales].
+        self._muestras_nodo: dict[str, list[int]] = defaultdict(lambda: [0, 0])
 
-    def procesar_fila(self, raw_json_str: str, host_status: str | None = None) -> None:
-        try:
-            raw = json.loads(raw_json_str)
-        except (json.JSONDecodeError, TypeError):
+    def procesar_fila(self, raw_json: Any, host_status: str | None = None, ts_db: Any = None) -> None:
+        """
+        raw_json: full_json_data (dict en Postgres, texto en SQLite).
+        host_status: no se usa para el uptime (es la salud del iDRAC); se conserva por compatibilidad.
+        ts_db: columna `timestamp` de la fila; si falta se usa la del envelope.
+        """
+        raw = a_dict(raw_json)
+        if raw is None:
             return
 
         snap = parse_snapshot(raw)
-        self._procesar_snapshot(snap, host_status)
+        hora = a_datetime(ts_db) or snap.timestamp
+        if hora is not None:
+            self._horas_reporte.append(hora.replace(tzinfo=None))
+        self._procesar_snapshot(snap)
 
-    def _procesar_snapshot(self, snap: SnapshotNormalizado, host_status: str | None) -> None:
+    def _procesar_snapshot(self, snap: SnapshotNormalizado) -> None:
         cfg = self.config
         ts = snap.timestamp
         self._total_snapshots += 1
-        if (host_status or "").lower() == "online":
-            self._snapshots_online += 1
 
         if snap.cpu_host_percent is not None:
             self._muestras_cpu_host.append(snap.cpu_host_percent)
@@ -174,17 +192,47 @@ class EventTracker:
                     {"fuente": fuente.nombre, "watts": fuente.watts, "status": fuente.status},
                 )
 
+        if cfg.enable_fans:
+            for fan in snap.ventiladores:
+                self._rastreadores["ventilador_fallo"].evaluar(
+                    fan.nombre, fan.status.upper() != "OK", ts,
+                    {"ventilador": fan.nombre, "rpm": fan.valor, "status": fan.status},
+                )
+
         if cfg.enable_raid:
+            # Mismo criterio que alerts_engine/infra.py del server: OK u Online es sano;
+            # volúmenes sin nombre o discos sin slot son respuestas con error del iDRAC
+            # (PMMN 2026-10-03), no elementos reales, y se ignoran.
             for ctrl in snap.controladores_raid:
-                status = (ctrl.get("status") or "").upper()
-                en_falla = bool(status) and status != "OK"
+                status = ctrl.get("status") or ""
+                en_falla = bool(status) and status not in ("OK", "Online")
                 self._rastreadores["raid_degradado"].evaluar(
-                    ctrl.get("name", "?"), en_falla, ts,
+                    f"controlador {ctrl.get('name', '?')}", en_falla, ts,
                     {"controlador": ctrl.get("name"), "status": status},
+                )
+            for vol in snap.volumenes_raid:
+                if not vol.get("name"):
+                    continue
+                status = vol.get("status") or "OK"
+                self._rastreadores["raid_degradado"].evaluar(
+                    f"volumen {vol['name']}", status not in ("OK", "Online"), ts,
+                    {"volumen": vol["name"], "status": status},
+                )
+            for disco in snap.discos_fisicos:
+                if not disco.get("slot"):
+                    continue
+                status = disco.get("status") or "OK"
+                self._rastreadores["raid_degradado"].evaluar(
+                    f"disco slot {disco['slot']}", status not in ("OK", "Online"), ts,
+                    {"slot": disco["slot"], "status": status},
                 )
 
         for nodo in snap.nodos_virtuales:
             en_falla_offline = nodo.state.lower() != "online"
+            contador = self._muestras_nodo[nodo.entidad_id]
+            contador[1] += 1
+            if not en_falla_offline:
+                contador[0] += 1
             self._rastreadores["nodo_offline"].evaluar(
                 nodo.entidad_id, en_falla_offline, ts,
                 {"tipo": nodo.tipo, "state": nodo.state, "state_reason": nodo.state_reason},
@@ -227,20 +275,63 @@ class EventTracker:
             "p95": round(ordenados[p95_idx], 1),
         }
 
-    def resumen(self) -> dict[str, Any]:
+    def _cobertura(self, inicio: datetime | None, fin: datetime | None) -> tuple[float | None, list[dict[str, Any]]]:
+        """
+        (% del período con el hospital reportando, huecos sin reportes).
+        Sin inicio/fin explícitos se usa el primer y el último reporte.
+        """
+        horas = sorted(self._horas_reporte)
+        if not horas:
+            return None, []
+        desde = inicio or horas[0]
+        hasta = min(fin or horas[-1], datetime.now())
+        total = (hasta - desde).total_seconds()
+        if total <= 0:
+            return None, []
+
+        umbral = timedelta(minutes=self.config.offline_minutes)
+        huecos: list[tuple[datetime, datetime]] = []
+        anterior = desde
+        for h in horas:
+            if h < desde or h > hasta:
+                continue
+            if h - anterior > umbral:
+                huecos.append((anterior, h))
+            anterior = h
+        if hasta - anterior > umbral:
+            huecos.append((anterior, hasta))
+
+        caido = sum((b - a).total_seconds() for a, b in huecos)
+        pct = round(max(0.0, 100.0 * (1 - caido / total)), 2)
+        detalle = [
+            {"desde": a.isoformat(timespec="minutes"), "hasta": b.isoformat(timespec="minutes"),
+             "duracion_min": round((b - a).total_seconds() / 60)}
+            for a, b in sorted(huecos, key=lambda x: x[1] - x[0], reverse=True)
+        ]
+        return pct, detalle
+
+    def resumen(self, inicio: datetime | None = None, fin: datetime | None = None) -> dict[str, Any]:
         eventos: list[Evento] = []
         for rastreador in self._rastreadores.values():
             eventos.extend(rastreador.finalizar())
         eventos.sort(key=lambda e: e.inicio)
 
-        uptime_pct = (
-            round(self._snapshots_online / self._total_snapshots * 100, 1)
-            if self._total_snapshots else None
-        )
+        uptime_pct, huecos = self._cobertura(inicio, fin)
+        disponibilidad_nodos = {
+            nodo: round(100.0 * online / total, 2)
+            for nodo, (online, total) in sorted(self._muestras_nodo.items())
+            if total
+        }
 
         return {
             "muestras_analizadas": self._total_snapshots,
             "uptime_pct": uptime_pct,
+            "uptime_definicion": (
+                "% del período con el hospital enviando reportes; los huecos de más de "
+                f"{self.config.offline_minutes} min sin reportes cuentan como caída"
+            ),
+            "huecos_sin_reportes": {"cantidad": len(huecos), "mas_largos": huecos[:10]},
+            "disponibilidad_vms_pct": disponibilidad_nodos,
             "metricas": {
                 "cpu_host": self._stats(self._muestras_cpu_host),
                 "ram_host": self._stats(self._muestras_ram_host),
@@ -253,12 +344,16 @@ class EventTracker:
 
 
 def analizar_historial(
-    filas: list[tuple[str, str | None]], config: ConfiguracionGlobal
+    filas: list[tuple[Any, ...]],
+    config: ConfiguracionGlobal,
+    inicio: Any = None,
+    fin: Any = None,
 ) -> dict[str, Any]:
     """
-    filas: lista de (full_json_data, host_status), ya ordenadas por timestamp asc.
+    filas: lista de (full_json_data, host_status[, timestamp]), ordenadas por timestamp asc.
+    inicio / fin: el período pedido (texto o datetime), para medir la cobertura completa.
     """
     tracker = EventTracker(config)
-    for raw_json_str, host_status in filas:
-        tracker.procesar_fila(raw_json_str, host_status)
-    return tracker.resumen()
+    for fila in filas:
+        tracker.procesar_fila(*fila)
+    return tracker.resumen(a_datetime(inicio), a_datetime(fin))

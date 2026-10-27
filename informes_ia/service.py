@@ -73,7 +73,7 @@ def generar_reporte(
 
     log.info("--- Generando reporte %s para %s (%s -> %s) ---", tipo_reporte, hospital_id, fecha_inicio, fecha_fin)
 
-    config_hospital = db.obtener_config_hospital(settings.db_path, hospital_id)
+    config_hospital = db.obtener_config_hospital(settings.database_url, hospital_id)
     if not config_hospital:
         raise HospitalNoEncontrado(f"No hay configuración para el hospital '{hospital_id}'")
 
@@ -82,13 +82,13 @@ def generar_reporte(
 
     ruta_img = ruta_base / f"grafico_{tipo_reporte}.png"
     ruta_grafico = db.generar_grafico_historico(
-        settings.db_path, hospital_id, fecha_inicio, fecha_fin, ruta_img
+        settings.database_url, hospital_id, fecha_inicio, fecha_fin, ruta_img
     )
 
-    config_dinamica = get_configuracion(settings.db_path)
+    config_dinamica = get_configuracion(settings.database_url)
     try:
         resumen = preprocess.generar_resumen(
-            settings.db_path, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
+            settings.database_url, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
         )
     except preprocess.SinDatosParaElPeriodo as e:
         raise DatosInsuficientes(str(e)) from e
