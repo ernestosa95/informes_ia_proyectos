@@ -25,7 +25,7 @@ _DDL = {
 }
 
 
-def snapshot(ts: datetime, *, ps2="OK", disco3="OK", vm_state="Online", ram_vm=40.0) -> dict:
+def snapshot(ts: datetime, *, ps2="OK", disco3="OK", vm_state="Online", ram_vm=40.0, svc="Running") -> dict:
     return {
         "envelope": {"schema_version": "4.5", "agent_version": "4.5.5", "hospital_id": HOSPITAL,
                      "timestamp": ts.isoformat()},
@@ -60,7 +60,12 @@ def snapshot(ts: datetime, *, ps2="OK", disco3="OK", vm_state="Online", ram_vm=4
             "telemetry": {"cpu": {"usage_percent": 20.0},
                           "ram": {"total_gb": 48.0, "used_gb": 19.2, "usage_percent": ram_vm}},
             "storage": [{"mount_point": "C:", "usage_percent": 60.0}],
-            "application_layer": {"services": []},
+            "application_layer": {"services": [
+                {"name": "MSSQLSERVER", "display_name": "SQL Server (MSSQLSERVER)", "state": "Running",
+                 "vital_signs": {"cpu_percent": 1.0, "ram_mb": 6000.0}},
+                {"name": "SLRadioService", "display_name": "SUITESTENSA Radio", "state": svc,
+                 "vital_signs": {"cpu_percent": 0.0, "ram_mb": 200.0}},
+            ]},
         }],
     }
 
@@ -92,8 +97,10 @@ def _poblar(conn) -> None:
         if not (INICIO + timedelta(hours=1) < ts < INICIO + timedelta(hours=2)):
             falla = INICIO + timedelta(hours=2, minutes=30) <= ts <= INICIO + timedelta(hours=3)
             offline = INICIO + timedelta(hours=3, minutes=10) <= ts <= INICIO + timedelta(hours=3, minutes=20)
+            svc_parado = INICIO + timedelta(hours=3, minutes=30) <= ts <= INICIO + timedelta(hours=3, minutes=45)
             snap = snapshot(ts, ps2="Critical" if falla else "OK", disco3="Failed" if falla else "OK",
-                            vm_state="Offline" if offline else "Online")
+                            vm_state="Offline" if offline else "Online",
+                            svc="Stopped" if svc_parado else "Running")
             i += 1
             conn.execute(
                 text("""INSERT INTO reportes_historicos VALUES (:id, :h, :ts, 'OK', 12.5, 94.0, 300, :j)"""),
@@ -115,6 +122,27 @@ def _poblar(conn) -> None:
             {"id": n, "h": HOSPITAL, "c": canal, "e": estado, "q": cola, "ts": ts.strftime("%Y-%m-%d %H:%M:%S"),
              "x": json.dumps({"instancia": "MIRTH_SE", "recibidos": 1000, "enviados": 990,
                               "errored": errored, "last_error": ""})},
+        )
+
+    # Backups (fecha = la del backup, puede ser anterior al período): ExtensaPACS de hace 52 h
+    # (alerta), ExtensaRadio de hace 5 h (OK), master nunca (NEVER). CHECKDB con error en una
+    # base. Una regla DICOM con cola. El portal con un estado.
+    otras = [
+        ("sql_backup", "ExtensaPACS", "OK", 0, {}, INICIO - timedelta(hours=48)),
+        ("sql_backup", "ExtensaRadio", "OK", 0, {}, INICIO - timedelta(hours=1)),
+        ("sql_backup", "master", "NEVER", 0, {}, INICIO + timedelta(minutes=5)),
+        ("sql_integrity", "ExtensaPACS", "ERROR", 3, {"detail": "CHECKDB found 0 allocation errors and 3 consistency errors"},
+         INICIO + timedelta(minutes=40)),
+        ("sql_integrity", "ExtensaRadio", "OK", 0, {"detail": ""}, INICIO + timedelta(minutes=45)),
+        ("dicom_routing", "7", "OK", 12, {"label": "CR1 → PACS"}, INICIO + timedelta(minutes=5)),
+        ("dicom_routing", "7", "OK", 40, {"label": "CR1 → PACS"}, INICIO + timedelta(minutes=10)),
+        ("patient_portal", "RIS:4", "Publicado", 900, {"state": "Publicado"}, INICIO + timedelta(minutes=5)),
+    ]
+    for n, (app, comp, estado, valor, extra, ts) in enumerate(otras, start=100):
+        conn.execute(
+            text("INSERT INTO software_monitoring VALUES (:id, :h, :a, :c, :e, :q, :x, :ts)"),
+            {"id": n, "h": HOSPITAL, "a": app, "c": comp, "e": estado, "q": valor,
+             "ts": ts.strftime("%Y-%m-%d %H:%M:%S"), "x": json.dumps(extra)},
         )
 
 

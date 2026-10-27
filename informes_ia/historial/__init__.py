@@ -2,7 +2,7 @@
 Subpaquete `historial`: capa de estados, persistencia y flujo asíncrono
 del módulo (prototipo).
 
-Ver docs/07-almacenamiento-y-estados.md.
+Ver ARQUITECTURA.md.
 """
 from .almacen import AlmacenReportes, Reporte
 from .estados import Estado, TipoFallo

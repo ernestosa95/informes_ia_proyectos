@@ -1,7 +1,7 @@
 """
 Estados del ciclo de vida de un reporte y políticas de reintento.
 
-Ver docs/07-almacenamiento-y-estados.md. Este módulo es la fuente de verdad
+Ver ARQUITECTURA.md. Este módulo es la fuente de verdad
 de los nombres de estado y de cuántos reintentos corresponden a cada tipo
 de fallo.
 """
@@ -28,7 +28,7 @@ class Estado(str, Enum):
         """
         Terminales = no hay más transiciones automáticas ni manuales.
         OJO: `finalizado` NO es terminal: espera revisión humana
-        (guardar_json_editado / aprobar). Ver doc 07.
+        (guardar_json_editado / aprobar). Ver ARQUITECTURA.md.
         """
         return self in (Estado.ERROR, Estado.APROBADO)
 
@@ -47,7 +47,7 @@ class TipoFallo(str, Enum):
 # Política por tipo de fallo, expresada en INTENTOS TOTALES (no reintentos):
 #   RED = 3  →  1 intento inicial + 2 reintentos = 3 llamadas como máximo.
 #   RESPUESTA_INVALIDA = 2  →  1 intento inicial + 1 reintento = 2 llamadas.
-# (Doc 07: "red = 3 intentos, respuesta inválida = 2 intentos".)
+# (ARQUITECTURA.md: "red = 3 intentos, respuesta inválida = 2 intentos".)
 INTENTOS_POR_TIPO: dict[TipoFallo, int] = {
     TipoFallo.RED: 3,
     TipoFallo.RESPUESTA_INVALIDA: 2,

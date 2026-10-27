@@ -16,7 +16,7 @@ from typing import Any
 from .almacen import AlmacenReportes
 from .estados import Estado
 from .servicio import EstadoInvalido, FalloRed, ServicioReportes
-from .validacion import RespuestaInvalida
+
 
 
 # ── dobles de prueba ─────────────────────────────────────────────────────

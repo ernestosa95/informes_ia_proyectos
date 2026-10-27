@@ -52,6 +52,7 @@ def generar_resumen(
     filas_historial = db.obtener_historial_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
     filas_uso = db.obtener_uso_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
     filas_software = db.obtener_software_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
+    backups = db.obtener_ultimos_backups(fuente, hospital_id, fecha_fin)
 
     if not filas_historial and not filas_uso and not filas_software:
         raise SinDatosParaElPeriodo(
@@ -69,11 +70,54 @@ def generar_resumen(
         if filas_historial else None
     )
     clinico = backlog_analyzer.analizar_uso(filas_uso, config) if filas_uso else None
-    software = software_auditor.analizar_software(filas_software, config) if filas_software else None
+    software = (
+        software_auditor.analizar_software(filas_software, config, backups=backups, fin=fecha_fin)
+        if filas_software or backups else None
+    )
 
-    return {
+    resumen = {
         "periodo": {"desde": fecha_inicio, "hasta": fecha_fin, "hospital_id": hospital_id},
         "infraestructura": infra,
         "actividad_clinica": clinico,
         "software": software,
     }
+    resumen["control_calidad"] = control_calidad(resumen)
+    return resumen
+
+
+# Debajo de esta proporción de reportes con un dato, se avisa que el dato es parcial.
+_COBERTURA_MINIMA = 0.5
+
+
+def control_calidad(resumen: dict[str, Any]) -> list[str]:
+    """
+    Avisos sobre los DATOS (no sobre el hospital) para quien revisa el borrador y para
+    la IA: qué faltó o qué conviene verificar antes de aprobar. La IA tiene la regla de
+    no afirmar nada sobre un punto marcado acá como sin datos.
+    """
+    avisos: list[str] = []
+    infra = resumen.get("infraestructura")
+    if not infra:
+        avisos.append("Sin reportes de infraestructura en el período: no hay uptime ni métricas de hardware.")
+    else:
+        uptime = infra.get("uptime_pct")
+        if uptime is not None and uptime < 90:
+            avisos.append(
+                f"Uptime de {uptime}%: verificar en el dashboard antes de aprobar "
+                "(puede ser un corte real o el agente sin enviar)."
+            )
+        total = infra.get("muestras_analizadas") or 0
+        con_dato = infra.get("reportes_con_dato") or {}
+        nombres = {"energia": "energía (fuentes)", "temperatura": "temperaturas",
+                   "raid": "RAID / discos físicos", "red": "latencia de red"}
+        for clave, nombre in nombres.items():
+            n = con_dato.get(clave, 0)
+            if total and n == 0:
+                avisos.append(f"Sin datos de {nombre} en el período (iDRAC no configurado o sin respuesta).")
+            elif total and n / total < _COBERTURA_MINIMA:
+                avisos.append(f"Datos de {nombre} sólo en {n} de {total} reportes: el análisis de ese punto es parcial.")
+    if not resumen.get("actividad_clinica"):
+        avisos.append("Sin KPIs de RIS/PACS en el período.")
+    if not resumen.get("software"):
+        avisos.append("Sin datos de software (Mirth, SSL, backups, CHECKDB) en el período.")
+    return avisos

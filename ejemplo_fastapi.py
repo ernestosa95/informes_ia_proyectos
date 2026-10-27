@@ -10,7 +10,6 @@ lo consume, con el worker corriendo como thread embebido.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Response
@@ -25,7 +24,7 @@ from informes_ia.worker import WorkerReportes
 
 settings = get_settings()
 pipeline = PipelineReal(settings)
-almacen = AlmacenReportes(Path("reportes_db.sqlite"))
+almacen = AlmacenReportes(settings.historial_db)
 
 servicio = ServicioReportes(
     almacen,

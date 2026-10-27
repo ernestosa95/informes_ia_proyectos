@@ -76,6 +76,9 @@ class ConfiguracionGlobal:
     kpi_execution_time: str
     global_alert_emails: list[str]
 
+    # Backups SQL (REQ-06): horas máximas sin backup completo (sql_backup_max_hours del server).
+    sql_backup_max_hours: int = field(default=24)
+
     # Umbrales que TODAVÍA no existen como clave explícita en `configuracion`
     # y que hoy vivimos con un default documentado. Ver README > TODOs.
     ssl_warning_days: int = field(default=30)
@@ -136,6 +139,7 @@ class ConfiguracionGlobal:
             ),
             kpi_execution_time=raw.get("kpi_execution_time", "08:00"),
             global_alert_emails=_split_csv(raw.get("global_alert_responsible_email")),
+            sql_backup_max_hours=_int("sql_backup_max_hours", 24),
         )
 
 

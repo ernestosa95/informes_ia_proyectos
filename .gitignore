@@ -5,3 +5,7 @@ reportes/
 docs_cache.json
 *.db
 .venv/
+
+# Informes reales y manuales: pueden tener datos de hospitales o material con licencia.
+*.pdf
+reportes_db.sqlite

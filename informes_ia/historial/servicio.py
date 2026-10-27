@@ -1,7 +1,7 @@
 """
 Orquestador del flujo asíncrono (prototipo).
 
-Expone las tres operaciones del doc 07:
+Expone las operaciones del flujo asíncrono (ARQUITECTURA.md):
     solicitar_reporte(peticion) -> report_id     (inmediato)
     consultar_estado(report_id) -> str
     obtener_reporte(report_id)  -> bytes (PDF)
@@ -18,7 +18,6 @@ los reintentos.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from ..logging_utils import get_logger
@@ -84,7 +83,7 @@ class ServicioReportes:
         self.preparar_contexto = preparar_contexto or (lambda peticion: peticion)
         self.backoff_base_s = backoff_base_s
 
-    # ── API pública (doc 07) ─────────────────────────────────────────────
+    # ── API pública (ARQUITECTURA.md) ─────────────────────────────────────────────
 
     def solicitar_reporte(
         self, peticion: dict[str, Any], solicitado_por: dict[str, Any] | None = None
@@ -220,6 +219,9 @@ class ServicioReportes:
         con reintentos cuya cantidad depende del tipo de fallo. Devuelve el
         data_json válido o lanza _AgotadoError.
         """
+        # Fallos por tipo: cada política cuenta sólo sus propios fallos. La columna
+        # `intentos` de la base sigue siendo el total, para auditoría.
+        fallos: dict[TipoFallo, int] = {}
         while True:
             try:
                 data = self.generador_ia(contexto)       # puede lanzar FalloRed
@@ -229,7 +231,8 @@ class ServicioReportes:
             except (FalloRed, RespuestaInvalida) as e:
                 tipo = TipoFallo.RED if isinstance(e, FalloRed) else TipoFallo.RESPUESTA_INVALIDA
                 tope = max_intentos(tipo)
-                n = self.almacen.incrementar_intentos(report_id)  # nº de intentos totales hechos
+                self.almacen.incrementar_intentos(report_id)
+                fallos[tipo] = n = fallos.get(tipo, 0) + 1
 
                 if n >= tope:
                     msg = f"{tipo.value}: {e} (agotado: {n}/{tope} intentos)"

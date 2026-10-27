@@ -1,80 +1,120 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
     <style>
-        @page { size: A4; margin: 1.5cm; }
-        body { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
-        .header { border-bottom: 3px solid {{ color }}; padding-bottom: 15px; display: flex; justify-content: space-between; margin-bottom: 30px;}
+        @page { size: A4; margin: 1.5cm 1.5cm 2cm 1.5cm;
+                @bottom-center { content: "{{ pie }}"; font-size: 8px; color: #aaa; } }
+        body { font-family: 'Segoe UI', 'DejaVu Sans', sans-serif; color: #2c3e50; font-size: 12px; line-height: 1.45; }
+        .header { border-bottom: 3px solid {{ color }}; padding-bottom: 12px; margin-bottom: 22px; }
+        .header table { width: 100%; }
         .title { font-size: 20px; font-weight: bold; color: {{ color }}; }
+        .subtitle { font-size: 12px; color: #333; }
         .meta { font-size: 10px; color: #7f8c8d; text-align: right; }
 
-        h2 { color: #2c3e50; font-size: 14px; text-transform: uppercase; border-bottom: 1px solid #eee; margin-top: 25px; padding-bottom: 5px; }
+        h2 { color: #2c3e50; font-size: 13px; text-transform: uppercase; border-bottom: 1px solid #eee;
+             margin-top: 22px; padding-bottom: 4px; }
+        h3 { font-size: 11px; text-transform: uppercase; color: #7f8c8d; margin: 12px 0 2px 0; }
 
-        .highlight { background: #f8f9fa; border-left: 4px solid {{ color }}; padding: 15px; border-radius: 4px; }
-        .badge { background: #d4edda; color: #155724; padding: 4px 10px; border-radius: 10px; font-weight: bold; font-size: 12px; }
+        .highlight { background: #f8f9fa; border-left: 4px solid {{ color }}; padding: 12px 15px; border-radius: 4px; }
+        .badge { background: #d4edda; color: #155724; padding: 3px 10px; border-radius: 10px; font-weight: bold; font-size: 12px; }
+        .badge.bajo { background: #fff3cd; color: #856404; }
 
-        .grid { display: table; width: 100%; border-spacing: 10px; margin: -10px; }
-        .col { display: table-cell; width: 33%; background: #fff; border: 1px solid #eee; padding: 10px; text-align: center; border-radius: 6px; }
-        .val { font-size: 18px; font-weight: bold; display: block; }
-        .lbl { font-size: 10px; text-transform: uppercase; color: #999; }
+        /* Cifras: siempre valores cortos calculados por el sistema, nunca texto de la IA. */
+        .cifras { width: 100%; border-collapse: separate; border-spacing: 8px; margin: 0 -8px; }
+        .cifras td { background: #fff; border: 1px solid #eee; border-radius: 6px; padding: 8px; text-align: center; width: 25%; }
+        .val { font-size: 17px; font-weight: bold; display: block; }
+        .lbl { font-size: 9px; text-transform: uppercase; color: #999; }
 
-        .inc-box { display: table-cell; width: 50%; padding: 15px; border-radius: 6px; }
+        .inc { width: 100%; border-collapse: separate; border-spacing: 8px; margin: 0 -8px; }
+        .inc td { width: 50%; padding: 12px; border-radius: 6px; }
         .inc-ext { background: #fff3cd; color: #856404; }
         .inc-int { background: #d1ecf1; color: #0c5460; }
+        .num { display: block; font-size: 22px; font-weight: bold; }
 
+        .nota { font-size: 11px; color: #555; padding: 10px; background: #fafafa; border-radius: 4px; margin-top: 8px; }
+        .reco { border-left: 3px solid #f39c12; padding-left: 10px; margin-top: 12px; }
+        .control { background: #fdecea; border-left: 4px solid #c0392b; padding: 10px 14px; font-size: 11px; }
+        table.det { width: 100%; border-collapse: collapse; font-size: 10px; }
+        table.det td, table.det th { border-bottom: 1px solid #eee; padding: 3px 6px; text-align: left; }
         img { max-width: 100%; border: 1px solid #eee; border-radius: 6px; }
-        .footer { position: fixed; bottom: 0; width: 100%; text-align: center; font-size: 9px; color: #ccc; border-top: 1px solid #eee; padding-top: 5px; }
     </style>
 </head>
 <body>
+    {% set c = data.cifras or {} %}
     <div class="header">
-        <div class="title">TM Infraestructura <br><span style="font-size:12px; color:#333">{{ titulo }}</span></div>
-        <div class="meta">{{ data.meta.hospital }}<br>{{ data.meta.fecha }}</div>
+        <table><tr>
+            <td><div class="title">TM Infraestructura</div><div class="subtitle">{{ titulo }}</div></td>
+            <td class="meta">{{ data.meta.hospital }}<br>
+                {% if data.meta.periodo %}Período: {{ data.meta.periodo }}<br>{% endif %}
+                Emitido: {{ data.meta.fecha }}</td>
+        </tr></table>
     </div>
 
     <div class="highlight">
-        <span class="badge">UPTIME: {{ data.resumen.uptime }}</span>
-        <p style="margin: 10px 0 0 0; font-style: italic">"{{ data.resumen.texto }}"</p>
+        <span class="badge {% if c.uptime_pct is not none and c.uptime_pct < 99 %}bajo{% endif %}">DISPONIBILIDAD: {{ data.resumen.uptime }}</span>
+        <p style="margin: 10px 0 0 0;">{{ data.resumen.texto }}</p>
+        {% if c.uptime_definicion %}<p style="margin: 6px 0 0 0; font-size: 9px; color: #999;">Disponibilidad: {{ c.uptime_definicion }}.</p>{% endif %}
     </div>
 
     <h2>1. Visión Operativa</h2>
-    <div style="text-align: center; margin-bottom: 20px;">
-        {% if grafico %}<img src="{{ grafico }}">{% endif %}
-    </div>
+    <table class="cifras"><tr>
+        <td><span class="val">{{ data.resumen.uptime }}</span><span class="lbl">Disponibilidad</span></td>
+        <td><span class="val">{{ '%.1f'|format(c.cpu_host_promedio_pct) ~ '%' if c.cpu_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">CPU promedio (host)</span></td>
+        <td><span class="val">{{ '%.1f'|format(c.ram_host_promedio_pct) ~ '%' if c.ram_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">RAM promedio (host)</span></td>
+        <td><span class="val">{{ c.temp_cpu_maxima_c ~ ' °C' if c.temp_cpu_maxima_c is not none else 's/d' }}</span><span class="lbl">Temp. CPU máxima</span></td>
+    </tr></table>
+    {% if grafico %}<div style="text-align: center; margin-top: 10px;"><img src="{{ grafico }}"></div>{% endif %}
 
-    <h2>2. Estado Infraestructura</h2>
-    <div class="grid">
-        <div class="col"><span class="val">{{ data.infraestructura.energia }}</span><span class="lbl">Energía</span></div>
-        <div class="col"><span class="val">{{ data.infraestructura.termica }}</span><span class="lbl">Térmica</span></div>
-        <div class="col"><span class="val">24/7</span><span class="lbl">Monitoreo</span></div>
-    </div>
-    <p style="font-size: 11px; color: #666; margin-top: 5px;">{{ data.infraestructura.mensaje }}</p>
+    <h2>2. Estado de la Infraestructura</h2>
+    <h3>Energía</h3><p style="margin: 0;">{{ data.infraestructura.energia }}</p>
+    <h3>Térmica</h3><p style="margin: 0;">{{ data.infraestructura.termica }}</p>
+    {% if data.infraestructura.mensaje %}<p class="nota">{{ data.infraestructura.mensaje }}</p>{% endif %}
 
     <h2>3. Gestión de Incidencias</h2>
-    <div class="grid">
-        <div class="inc-box inc-ext">
-            <strong style="display:block; font-size:24px">{{ data.incidencias.externas }}</strong>
-            <span style="font-size:11px; text-transform:uppercase">Tickets Usuario</span>
-        </div>
-        <div class="inc-box inc-int">
-            <strong style="display:block; font-size:24px">{{ data.incidencias.internas }}</strong>
-            <span style="font-size:11px; text-transform:uppercase">Proactivos (System)</span>
-        </div>
-    </div>
-    <div style="margin-top: 10px; font-size: 12px; color: #555; padding: 10px; background: #fafafa; border-radius: 4px;">
-        <strong>Análisis:</strong> {{ data.incidencias.analisis }}
-    </div>
+    <table class="inc"><tr>
+        <td class="inc-ext"><span class="num">{{ data.incidencias.externas }}</span>
+            <span style="font-size:10px; text-transform:uppercase">Casos de gestión (Asana)</span></td>
+        <td class="inc-int"><span class="num">{{ data.incidencias.internas }}</span>
+            <span style="font-size:10px; text-transform:uppercase">Eventos detectados por el monitoreo</span></td>
+    </tr></table>
+    <div class="nota"><strong>Análisis:</strong> {{ data.incidencias.analisis }}</div>
 
-    <h2>4. Calidad & Recomendaciones</h2>
+    <h2>4. Calidad &amp; Recomendaciones</h2>
     <ul>
         <li><strong>Estabilidad:</strong> {{ data.calidad.estabilidad }}</li>
-        <li><strong>Caso Clave:</strong> {{ data.calidad.caso_destacado }}</li>
+        <li><strong>Caso destacado:</strong> {{ data.calidad.caso_destacado }}</li>
     </ul>
-    <div style="border-left: 3px solid #f39c12; padding-left: 10px; margin-top: 15px;">
-        <strong style="color: #e67e22; font-size: 11px;">RECOMENDACIÓN:</strong>
-        <p style="margin: 2px 0 0 0; font-size: 12px;">{{ data.recomendacion }}</p>
+    <div class="reco">
+        <strong style="color: #e67e22; font-size: 11px;">RECOMENDACIÓN</strong>
+        <p style="margin: 2px 0 0 0;">{{ data.recomendacion }}</p>
     </div>
 
-    <div class="footer">Generado automáticamente por TecnoMonitor v3.0 - {{ data.meta.tipo|upper }}</div>
+    {% if data.meta.tipo == 'interno' %}
+    <h2>5. Detalle técnico</h2>
+    {% if data.control_calidad %}
+    <div class="control"><strong>Control de calidad de los datos</strong>
+        <ul style="margin: 4px 0 0 0;">{% for a in data.control_calidad %}<li>{{ a }}</li>{% endfor %}</ul>
+    </div>
+    {% endif %}
+    {% if c.eventos_por_tipo %}
+    <h3>Eventos por tipo</h3>
+    <table class="det"><tr><th>Tipo</th><th>Cantidad</th></tr>
+        {% for tipo, n in c.eventos_por_tipo|dictsort %}<tr><td>{{ tipo }}</td><td>{{ n }}</td></tr>{% endfor %}
+    </table>
+    {% endif %}
+    {% if c.disponibilidad_vms_pct %}
+    <h3>Disponibilidad por VM / equipo</h3>
+    <table class="det"><tr><th>VM / equipo</th><th>Online</th></tr>
+        {% for vm, pct in c.disponibilidad_vms_pct|dictsort %}<tr><td>{{ vm }}</td><td>{{ pct }}%</td></tr>{% endfor %}
+    </table>
+    {% endif %}
+    <h3>Software</h3>
+    <table class="det">
+        <tr><td>Canales Mirth con problema</td><td>{{ c.canales_mirth_con_problema }}</td></tr>
+        <tr><td>Bases sin backup reciente</td><td>{{ c.bases_sin_backup_reciente }}</td></tr>
+        <tr><td>Certificados SSL con alerta</td><td>{{ c.certificados_ssl_con_alerta }}</td></tr>
+    </table>
+    {% endif %}
 </body>
 </html>

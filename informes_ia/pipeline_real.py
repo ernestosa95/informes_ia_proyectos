@@ -1,31 +1,29 @@
 """
-Adaptador entre el pipeline real y la máquina de estados del historial.
+El pipeline real: las piezas que generan un informe. Lo usan los dos modos:
+el asíncrono (historial/servicio.py + worker.py) y el sincrónico
+(service.generar_reporte). Es el único lugar que conecta:
 
-El esqueleto de `historial/servicio.py` es agnóstico de CÓMO se genera el
-reporte: recibe piezas inyectadas. Este módulo provee las implementaciones
-REALES, conectando:
-
-    preprocess.generar_resumen()      → pre-procesa lab_monitor.db   (fase preparación)
-    ai_report.generar_json_con_ia()   → llama a Gemini               (fase reintentable)
+    preprocess.generar_resumen()      → pre-procesa la base de TecnoMonitor (fase preparación)
+    ai_report.generar_json_con_ia()   → llama a Gemini                       (fase reintentable)
+    ai_report.completar_con_cifras()  → cifras y control de calidad desde el código
     db.generar_grafico_historico()    → PNG real
     render.renderizar_pdf_desde_json()→ PDF real
 
-Puntos clave de diseño (doc 07):
-  - La preparación (leer DB, pre-procesar) corre UNA vez: va en
-    `preparar_contexto`, NO se reintenta.
+Puntos clave de diseño (ARQUITECTURA.md):
+  - La preparación (leer DB, pre-procesar, Asana, manuales) corre UNA vez: va
+    en `preparar_contexto`, NO se reintenta.
   - Sólo la llamada a Gemini es reintentable: va en `generador_ia`, que
     recibe el contexto ya preparado.
-  - Si Gemini devuelve 429 con retry_delay, se extrae y se respeta.
+  - Si Gemini devuelve 429 con un retryDelay, se respeta (FalloRed.retry_delay_s).
 """
 from __future__ import annotations
 
-import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
 
 from . import ai_report, asana_client, db, docs_context, preprocess, render
 from .config import Settings, get_settings
@@ -35,6 +33,14 @@ from .historial.validacion import RespuestaInvalida
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
+
+
+class HospitalInexistente(RespuestaInvalida):
+    """El hospital no está en hospitales_metadata. No se reintenta."""
+
+
+class SinDatos(RespuestaInvalida):
+    """Ninguna de las fuentes tiene datos para el período. No se reintenta."""
 
 
 @dataclass
@@ -47,21 +53,6 @@ class ContextoReporte:
     tipo_reporte: str
 
 
-def _extraer_retry_delay(error: Exception) -> float | None:
-    """
-    Extrae los segundos de 'Please retry in Xs' / 'retry_delay { seconds: X }'
-    del error 429 de Gemini, si están presentes.
-    """
-    txt = str(error)
-    m = re.search(r"retry in (\d+(?:\.\d+)?)s", txt)
-    if m:
-        return float(m.group(1))
-    m = re.search(r"seconds:\s*(\d+)", txt)
-    if m:
-        return float(m.group(1))
-    return None
-
-
 class PipelineReal:
     """
     Provee las piezas que ServicioReportes inyecta:
@@ -71,9 +62,9 @@ class PipelineReal:
       - render_pdf(data, png)       -> bytes
     """
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Settings | None = None, client: genai.Client | None = None):
         self.settings = settings or get_settings()
-        genai.configure(api_key=self.settings.gemini_api_key)
+        self.client = client or genai.Client(api_key=self.settings.gemini_api_key)
 
     # ── FASE 1: preparación (una vez, NO se reintenta) ───────────────────
 
@@ -82,25 +73,32 @@ class PipelineReal:
         fecha_inicio = peticion["fecha_inicio"]
         fecha_fin = peticion["fecha_fin"]
         tipo_reporte = peticion.get("tipo_reporte", "cliente")
+        fuente = self.settings.database_url
 
-        config_hospital = db.obtener_config_hospital(self.settings.database_url, hospital_id)
+        config_hospital = db.obtener_config_hospital(fuente, hospital_id)
         if not config_hospital:
-            raise RespuestaInvalida(f"hospital '{hospital_id}' no está en hospitales_metadata")
+            raise HospitalInexistente(f"hospital '{hospital_id}' no está en hospitales_metadata")
 
-        config_dinamica = get_configuracion(self.settings.database_url)
+        config_dinamica = get_configuracion(fuente)
         try:
             resumen = preprocess.generar_resumen(
-                self.settings.database_url, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
+                fuente, hospital_id, fecha_inicio, fecha_fin, config=config_dinamica
             )
         except preprocess.SinDatosParaElPeriodo as e:
-            raise RespuestaInvalida(f"sin datos: {e}") from e
+            raise SinDatos(f"sin datos: {e}") from e
 
         asana_txt = asana_client.obtener_tareas_asana(
             self.settings.asana_access_token, config_hospital["asana_id"],
             fecha_inicio, fecha_fin,
+            zona_horaria=self.settings.zona_horaria,
+            anonimizar=self.settings.anonimizar_asana,
         )
+        if not self.settings.asana_access_token:
+            resumen.setdefault("control_calidad", []).append(
+                "Asana sin configurar: no se incluyeron casos de gestión ni tickets."
+            )
         pdfs = docs_context.cargar_contexto_persistente(
-            self.settings.carpeta_docs, self.settings.cache_file
+            self.client, self.settings.carpeta_docs, self.settings.cache_file
         )
 
         log.info("Contexto preparado para %s (se hace una sola vez)", hospital_id)
@@ -115,21 +113,21 @@ class PipelineReal:
     def generador_ia(self, contexto: ContextoReporte) -> dict[str, Any]:
         """
         Sólo la llamada a Gemini. NO re-preprocesa: usa el contexto ya listo.
-        Traduce el 429 (rate limit) a FalloRed con su retry_delay.
+        Error de API (incluido el 429 con su retryDelay) -> FalloRed;
+        texto que no es JSON -> RespuestaInvalida.
         """
         try:
             data = ai_report.generar_json_con_ia(
-                contexto.resumen, contexto.asana_txt, contexto.hospital_nombre,
+                self.client, contexto.resumen, contexto.asana_txt, contexto.hospital_nombre,
                 contexto.pdfs, contexto.tipo_reporte,
                 model_name=self.settings.gemini_model_json,
             )
-        except Exception as e:
-            raise FalloRed(f"error llamando a Gemini: {e}",
-                           retry_delay_s=_extraer_retry_delay(e)) from e
+        except ai_report.ErrorAPIGemini as e:
+            raise FalloRed(str(e), retry_delay_s=e.retry_delay_s) from e
+        except ai_report.RespuestaNoJSON as e:
+            raise RespuestaInvalida(str(e)) from e
 
-        if data is None:
-            raise FalloRed("Gemini no devolvió un JSON usable (respuesta None)")
-        return data
+        return ai_report.completar_con_cifras(data, contexto.resumen, contexto.asana_txt)
 
     # ── gráfico y render ─────────────────────────────────────────────────
 

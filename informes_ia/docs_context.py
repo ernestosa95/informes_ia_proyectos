@@ -12,12 +12,21 @@ import time
 from pathlib import Path
 from typing import Any
 
-import google.generativeai as genai
-from google.api_core.exceptions import NotFound
+from google import genai
+from google.genai import errors as genai_errors
 
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
+
+# Tope de espera mientras Gemini procesa un PDF subido. Antes no había tope y
+# un archivo trabado en PROCESSING dejaba el reporte esperando para siempre.
+ESPERA_MAX_PROCESSING_S = 120
+
+
+def _estado(archivo: Any) -> str:
+    estado = getattr(archivo, "state", None)
+    return str(getattr(estado, "value", estado) or "")
 
 
 def _leer_cache(cache_file: Path) -> dict[str, Any]:
@@ -32,10 +41,11 @@ def _guardar_cache(cache_file: Path, cache: dict[str, Any]) -> None:
         json.dump(cache, f, indent=2, ensure_ascii=False)
 
 
-def cargar_contexto_persistente(carpeta_docs: Path, cache_file: Path) -> list[Any]:
+def cargar_contexto_persistente(client: genai.Client, carpeta_docs: Path, cache_file: Path) -> list[Any]:
     """
     Devuelve la lista de archivos ACTIVE en Gemini listos para adjuntar
-    a un prompt, subiendo o re-subiendo lo que haga falta.
+    a un prompt, subiendo o re-subiendo lo que haga falta. Gemini borra los
+    archivos subidos a las 48 h: la caché sólo evita re-subir dentro de ese plazo.
     """
     archivos_listos: list[Any] = []
     cache = _leer_cache(cache_file)
@@ -49,36 +59,36 @@ def cargar_contexto_persistente(carpeta_docs: Path, cache_file: Path) -> list[An
     cache_actualizado: dict[str, Any] = {}
     cambios = False
 
-    for archivo_local in carpeta_docs.glob("*.pdf"):
+    for archivo_local in sorted(carpeta_docs.glob("*.pdf")):
         nombre = archivo_local.name
 
         if nombre in cache:
-            datos = cache[nombre]
             try:
-                remoto = genai.get_file(datos["name"])
-                if remoto.state.name == "ACTIVE":
+                remoto = client.files.get(name=cache[nombre]["name"])
+                if _estado(remoto) == "ACTIVE":
                     archivos_listos.append(remoto)
-                    cache_actualizado[nombre] = datos
+                    cache_actualizado[nombre] = cache[nombre]
                     continue
-            except NotFound:
-                log.warning("Manual '%s' ya no existe en Gemini, se re-sube.", nombre)
+            except genai_errors.ClientError:
+                log.warning("Manual '%s' ya no está en Gemini (vencido o borrado), se re-sube.", nombre)
 
         log.info("Subiendo manual: %s", nombre)
         try:
-            subido = genai.upload_file(path=archivo_local)
-            while subido.state.name == "PROCESSING":
+            subido = client.files.upload(file=archivo_local)
+            limite = time.monotonic() + ESPERA_MAX_PROCESSING_S
+            while _estado(subido) == "PROCESSING" and time.monotonic() < limite:
                 time.sleep(2)
-                subido = genai.get_file(subido.name)
-            if subido.state.name == "ACTIVE":
+                subido = client.files.get(name=subido.name)
+            if _estado(subido) == "ACTIVE":
                 archivos_listos.append(subido)
                 cache_actualizado[nombre] = {"name": subido.name, "uri": subido.uri}
                 cambios = True
             else:
-                log.error("Manual '%s' terminó en estado %s", nombre, subido.state.name)
+                log.error("Manual '%s' quedó en estado %s; se sigue sin él", nombre, _estado(subido))
         except Exception:
-            log.exception("Error subiendo manual '%s'", nombre)
+            log.exception("Error subiendo manual '%s'; se sigue sin él", nombre)
 
-    if cambios:
+    if cambios or set(cache_actualizado) != set(cache):
         _guardar_cache(cache_file, cache_actualizado)
 
     return archivos_listos

@@ -38,8 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--desde", required=True, help="'YYYY-MM-DD HH:MM:SS'")
     p.add_argument("--hasta", required=True, help="'YYYY-MM-DD HH:MM:SS'")
     p.add_argument("--tipo", choices=["cliente", "interno"], default="cliente")
-    p.add_argument("--db-historial", default="reportes_db.sqlite",
-                   help="Ruta de la DB propia del módulo (default: reportes_db.sqlite)")
+    p.add_argument("--db-historial", default=None,
+                   help="Ruta de la DB propia del módulo (default: HISTORIAL_DB_FILENAME del .env)")
     return p
 
 
@@ -61,10 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  rango        : {args.desde}  →  {args.hasta}")
     print(f"  tipo         : {args.tipo}")
     print(f"  base datos   : {settings.database_url.split('@')[-1]}")  # sin usuario/clave
-    print(f"  db historial : {args.db_historial}")
+    print(f"  db historial : {args.db_historial or settings.historial_db}")
 
     # 2. Montar la capa async con el pipeline REAL inyectado
-    almacen = AlmacenReportes(Path(args.db_historial))
+    almacen = AlmacenReportes(Path(args.db_historial) if args.db_historial else settings.historial_db)
     pipeline = PipelineReal(settings)
     svc = ServicioReportes(
         almacen,

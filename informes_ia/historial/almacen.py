@@ -3,7 +3,7 @@ Almacén de reportes: la DB propia del módulo (SQLite), separada de
 lab_monitor.db. Guarda el ciclo de vida y lo necesario para reconstruir el
 PDF on-demand.
 
-Ver docs/07-almacenamiento-y-estados.md para el modelo de datos y el porqué
+Ver ARQUITECTURA.md para el modelo de datos y el porqué
 de cada campo.
 """
 from __future__ import annotations

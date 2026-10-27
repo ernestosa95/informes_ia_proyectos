@@ -115,6 +115,7 @@ class EventTracker:
             "ventilador_fallo": _RastreadorUmbral("ventilador_fallo", "alta"),
             "raid_degradado": _RastreadorUmbral("raid_degradado", "alta"),
             "nodo_offline": _RastreadorUmbral("nodo_offline", "alta"),
+            "servicio_detenido": _RastreadorUmbral("servicio_detenido", "media"),
         }
         # Muestras crudas para calcular avg/max/p95 al final (no requiere
         # guardar todo el JSON, sólo los escalares que nos interesan).
@@ -128,6 +129,8 @@ class EventTracker:
         self._horas_reporte: list[datetime] = []
         # Por VM / equipo: [muestras online, muestras totales].
         self._muestras_nodo: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        # En cuántos reportes vino cada tipo de dato (control de calidad).
+        self._con_dato: dict[str, int] = defaultdict(int)
 
     def procesar_fila(self, raw_json: Any, host_status: str | None = None, ts_db: Any = None) -> None:
         """
@@ -149,6 +152,15 @@ class EventTracker:
         cfg = self.config
         ts = snap.timestamp
         self._total_snapshots += 1
+        for clave, hay in (
+            ("energia", bool(snap.fuentes_poder)),
+            ("temperatura", bool(snap.sensores)),
+            ("raid", bool(snap.controladores_raid or snap.volumenes_raid or snap.discos_fisicos)),
+            ("red", snap.network_latency_ms is not None),
+            ("vms", bool(snap.nodos_virtuales)),
+        ):
+            if hay:
+                self._con_dato[clave] += 1
 
         if snap.cpu_host_percent is not None:
             self._muestras_cpu_host.append(snap.cpu_host_percent)
@@ -237,6 +249,14 @@ class EventTracker:
                 nodo.entidad_id, en_falla_offline, ts,
                 {"tipo": nodo.tipo, "state": nodo.state, "state_reason": nodo.state_reason},
             )
+
+            if nodo.tipo == "vm" and not en_falla_offline:
+                # REQ-09: un servicio configurado que no está Running (Stopped, NotFound...).
+                for svc in nodo.servicios:
+                    self._rastreadores["servicio_detenido"].evaluar(
+                        f"{nodo.entidad_id}:{svc.nombre}", svc.state.lower() != "running", ts,
+                        {"vm": nodo.entidad_id, "servicio": svc.display_name, "state": svc.state},
+                    )
 
             if nodo.tipo == "vm":
                 if nodo.cpu_percent is not None:
@@ -332,6 +352,7 @@ class EventTracker:
             ),
             "huecos_sin_reportes": {"cantidad": len(huecos), "mas_largos": huecos[:10]},
             "disponibilidad_vms_pct": disponibilidad_nodos,
+            "reportes_con_dato": dict(self._con_dato),
             "metricas": {
                 "cpu_host": self._stats(self._muestras_cpu_host),
                 "ram_host": self._stats(self._muestras_ram_host),

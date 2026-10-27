@@ -29,7 +29,7 @@ Garantías
   con un UPDATE condicional. Si hubiera varios workers, sólo uno gana el
   reporte. Hoy hay uno solo, pero la protección es gratis.
 - **Recuperación de huérfanos**: al arrancar, los reportes que quedaron en
-  EN_PROCESO (porque el worker murió a mitad) se marcan ERROR. Ver doc 07.
+  EN_PROCESO (porque el worker murió a mitad) se marcan ERROR. Ver ARQUITECTURA.md.
 - **Apagado ordenado**: ante SIGTERM/SIGINT (o `detener()`), termina el
   reporte en curso y recién ahí sale. No deja huérfanos por un apagado limpio.
 """
@@ -145,7 +145,6 @@ class WorkerReportes:
 
 def _construir_servicio() -> ServicioReportes:
     """Arma el servicio con el pipeline real, para el modo standalone."""
-    from pathlib import Path
 
     from .config import get_settings
     from .historial.almacen import AlmacenReportes
@@ -153,7 +152,7 @@ def _construir_servicio() -> ServicioReportes:
 
     settings = get_settings()
     pipeline = PipelineReal(settings)
-    almacen = AlmacenReportes(Path("reportes_db.sqlite"))
+    almacen = AlmacenReportes(settings.historial_db)
     return ServicioReportes(
         almacen,
         generador_ia=pipeline.generador_ia,

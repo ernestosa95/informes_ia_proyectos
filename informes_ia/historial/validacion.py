@@ -1,6 +1,6 @@
 """
-Validación de la respuesta de la IA (doc 06 > "Validación de la respuesta
-de la IA" y doc 07 > "los tres desenlaces").
+Validación de la respuesta de la IA (ARQUITECTURA.md > "Validación de la respuesta
+de la IA").
 
 No alcanza con que la respuesta parsee: debe tener las claves pedidas.
 `meta` y `resumen` son siempre obligatorias; las demás dependen de las
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# Secciones que SIEMPRE deben estar (inocultables, doc 06).
+# Secciones que SIEMPRE deben estar (inocultables, ARQUITECTURA.md).
 CLAVES_OBLIGATORIAS = {"meta", "resumen"}
 
 

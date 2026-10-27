@@ -16,8 +16,20 @@ Los casos se separan en DOS grupos, porque conviven dos naturalezas:
     para que la IA sepa que existieron sin gastar tokens ni confundirlos
     con reclamos del cliente.
 
-Un ticket es AUTOMÁTICO si su descripción empieza con la firma fija que
-pone el sistema (FIRMA_AUTOMATICO). Todo lo demás es humano.
+Un ticket es AUTOMÁTICO si la firma fija que pone el sistema
+(FIRMA_AUTOMATICO) está al comienzo de su descripción. No se exige que sea
+la primera línea: las tareas de continuación (cuando una alerta llega al tope
+de comentarios, asana_conector.py del server) arrancan con "🔁 CONTINUACIÓN"
+y recién después la firma. Todo lo demás es humano.
+
+Fechas: el período llega en hora local (la de la base); se convierte con la
+zona horaria configurada antes de comparar con Asana, que trabaja en UTC.
+Antes se tomaba como UTC y el filtro quedaba corrido 3 horas.
+
+Privacidad: los textos humanos (descripción y comentarios) se anonimizan
+antes de mandarlos a Gemini: DNI, CUIL/CUIT, mails y teléfonos se reemplazan
+por marcas. Los nombres propios no se pueden detectar de forma confiable:
+quien escribe en Asana no debería poner datos de pacientes.
 
 Sólo se incluyen tareas creadas o modificadas dentro del rango del reporte.
 Tope de tareas MAX_TAREAS; si hay más, se avisa.
@@ -26,8 +38,10 @@ Escrito para la librería `asana` 5.x (Configuration + ApiClient + *Api).
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import asana
 from asana.rest import ApiException
@@ -43,16 +57,34 @@ MAX_TAREAS = 50
 # Firma fija que TecnoMonitor pone al inicio de la descripción de los
 # tickets que genera automáticamente. Es la señal para clasificar.
 FIRMA_AUTOMATICO = "INCIDENTE DETECTADO - TECNOMONITOR"
+# Hasta dónde se busca la firma (la línea de continuación ocupa ~250 caracteres).
+_ALCANCE_FIRMA = 600
+
+_PATRONES_ANONIMIZAR = [
+    (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "[email]"),
+    (re.compile(r"\b(?:20|23|24|27|30|33|34)-?\d{8}-?\d\b"), "[cuil]"),
+    # Teléfonos: característica + número ("0261 4123456", "(011) 4123-4567", "+54 9 261 412-3456").
+    (re.compile(r"(?<![\w/])(?:\+?54[\s-]?)?(?:9[\s-]?)?\(?0?\d{2,4}\)?[\s-]?\d{2,4}[\s-]?\d{4}(?![\w/:])"), "[telefono]"),
+    (re.compile(r"\b\d{1,2}\.\d{3}\.\d{3}\b|\b\d{7,8}\b"), "[dni]"),
+]
 
 
-def _parse_fecha(fecha_str: str, default_dias_atras: int = 30) -> datetime:
+def anonimizar(texto: str) -> str:
+    """Reemplaza DNI, CUIL/CUIT, mails y teléfonos por marcas."""
+    for patron, marca in _PATRONES_ANONIMIZAR:
+        texto = patron.sub(marca, texto)
+    return texto
+
+
+def _parse_fecha(fecha_str: str, zona: ZoneInfo, default_dias_atras: int = 30) -> datetime:
+    """Fecha local del período -> datetime con zona (Asana compara en UTC)."""
     try:
         dt = datetime.strptime(fecha_str, "%Y-%m-%d %H:%M:%S")
     except (ValueError, TypeError):
         dt = datetime.now() - timedelta(days=default_dias_atras)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+        dt = dt.replace(tzinfo=zona)
+    return dt.astimezone(timezone.utc)
 
 
 def _crear_clientes(token: str):
@@ -89,9 +121,9 @@ def _fmt_fecha(val) -> str:
 
 
 def _es_automatico(t: dict) -> bool:
-    """True si la descripción arranca con la firma fija de TecnoMonitor."""
+    """True si la firma fija de TecnoMonitor está al comienzo de la descripción."""
     notes = (t.get("notes") or "").strip()
-    return notes.startswith(FIRMA_AUTOMATICO)
+    return FIRMA_AUTOMATICO in notes[:_ALCANCE_FIRMA]
 
 
 def _estado_str(t: dict) -> str:
@@ -119,16 +151,17 @@ def _obtener_comentarios(stories_api, task_gid: str) -> list[str]:
     return comentarios
 
 
-def _formatear_humano(t: dict, stories_api) -> str:
-    """Caso humano: completo, con descripción y comentarios."""
-    partes = [f"CASO: {t.get('name', '(sin titulo)')}", f"Estado: {_estado_str(t)}"]
+def _formatear_humano(t: dict, stories_api, anonimizar_texto: bool = True) -> str:
+    """Caso humano: completo, con descripción y comentarios (anonimizados)."""
+    limpiar = anonimizar if anonimizar_texto else (lambda x: x)
+    partes = [f"CASO: {limpiar(t.get('name', '(sin titulo)'))}", f"Estado: {_estado_str(t)}"]
     descripcion = (t.get("notes") or "").strip()
     if descripcion:
-        partes.append(f"Descripcion: {descripcion}")
+        partes.append(f"Descripcion: {limpiar(descripcion)}")
     comentarios = _obtener_comentarios(stories_api, t["gid"])
     if comentarios:
         partes.append("Comentarios:")
-        partes.extend(f"  - {c}" for c in comentarios)
+        partes.extend(f"  - {limpiar(c)}" for c in comentarios)
     return "\n".join(partes)
 
 
@@ -142,6 +175,8 @@ def obtener_tareas_asana(
     project_id: str,
     fecha_inicio_str: str,
     fecha_fin_str: str | None = None,
+    zona_horaria: str = "America/Argentina/Buenos_Aires",
+    anonimizar: bool = True,
 ) -> dict[str, Any]:
     """
     Devuelve un dict con dos grupos de casos del período:
@@ -162,8 +197,9 @@ def obtener_tareas_asana(
     log.info("Consultando Asana (proyecto %s)...", project_id)
     tasks_api, stories_api = _crear_clientes(asana_access_token)
 
-    fecha_min = _parse_fecha(fecha_inicio_str)
-    fecha_max = _parse_fecha(fecha_fin_str) if fecha_fin_str else datetime.now(timezone.utc)
+    zona = ZoneInfo(zona_horaria)
+    fecha_min = _parse_fecha(fecha_inicio_str, zona)
+    fecha_max = _parse_fecha(fecha_fin_str, zona) if fecha_fin_str else datetime.now(timezone.utc)
 
     humanos: list[str] = []
     automaticos: list[str] = []
@@ -193,7 +229,7 @@ def obtener_tareas_asana(
                 automaticos.append(_formatear_automatico(t))
             else:
                 # Humano: completo, con comentarios (llamada extra por tarea).
-                humanos.append(_formatear_humano(t, stories_api))
+                humanos.append(_formatear_humano(t, stories_api, anonimizar))
 
         if total > MAX_TAREAS:
             humanos.append(f"[NOTA: habia {total} casos en el periodo; se incluyeron los primeros {MAX_TAREAS}.]")

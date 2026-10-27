@@ -1,4 +1,4 @@
-google-generativeai>=0.8.0
+google-genai>=1.0.0
 asana>=5.0.0
 matplotlib>=3.8.0
 python-dateutil>=2.9.0

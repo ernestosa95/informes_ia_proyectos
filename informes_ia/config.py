@@ -33,6 +33,12 @@ class Settings:
     cache_file: Path
     carpeta_docs: Path
     carpeta_reportes: Path
+    # Base propia del módulo (historial de informes, estados, borradores).
+    historial_db: Path
+    # Zona horaria de las fechas del período y de la base (el server guarda hora local).
+    zona_horaria: str
+    # Anonimizar los textos de Asana (DNI, mails, teléfonos) antes de mandarlos a Gemini.
+    anonimizar_asana: bool
 
     @staticmethod
     def load() -> "Settings":
@@ -49,6 +55,9 @@ class Settings:
         return Settings(
             gemini_api_key=gemini_api_key,
             asana_access_token=os.getenv("ASANA_ACCESS_TOKEN"),  # opcional
+            # Conviene fijar una versión (ej. "gemini-2.5-flash"): con un alias "-latest"
+            # el modelo cambia sin aviso y dos informes iguales pueden salir distintos.
+            # El modelo que respondió queda en meta.modelo de cada informe.
             gemini_model_json=os.getenv("GEMINI_MODEL_JSON", "gemini-flash-latest"),
             gemini_model_datos=os.getenv("GEMINI_MODEL_DATOS", "gemini-flash-latest"),
             db_path=db_path,
@@ -56,6 +65,9 @@ class Settings:
             cache_file=base_dir / os.getenv("CACHE_FILENAME", "docs_cache.json"),
             carpeta_docs=base_dir / os.getenv("DOCS_DIRNAME", "docs"),
             carpeta_reportes=base_dir / os.getenv("REPORTES_DIRNAME", "reportes"),
+            historial_db=base_dir / os.getenv("HISTORIAL_DB_FILENAME", "reportes_db.sqlite"),
+            zona_horaria=os.getenv("ZONA_HORARIA", "America/Argentina/Buenos_Aires"),
+            anonimizar_asana=os.getenv("ASANA_ANONIMIZAR", "1") != "0",
         )
 
 

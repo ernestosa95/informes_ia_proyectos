@@ -173,3 +173,26 @@ def obtener_software_crudo(
                 {"h": hospital_id, "ini": inicio, "fin": fin},
             )
         ]
+
+
+def obtener_ultimos_backups(fuente: str | Path, hospital_id: str, fin: str) -> list[dict[str, Any]]:
+    """
+    Último backup completo de cada base hasta `fin` (`software_monitoring.sql_backup`, REQ-06).
+    Va aparte de obtener_software_crudo porque el server guarda cada backup con la fecha en
+    que se hizo: el de una base puede ser anterior al período y igual es "el último".
+    """
+    with get_engine(fuente).connect() as conn:
+        return [
+            dict(r._mapping)
+            for r in conn.execute(
+                text("""SELECT s.component_id, s.status_value, s.timestamp
+                        FROM software_monitoring s
+                        JOIN (SELECT component_id, MAX(timestamp) AS ts FROM software_monitoring
+                              WHERE hospital_id = :h AND app_name = 'sql_backup' AND timestamp <= :fin
+                              GROUP BY component_id) u
+                          ON u.component_id = s.component_id AND u.ts = s.timestamp
+                        WHERE s.hospital_id = :h AND s.app_name = 'sql_backup'
+                        ORDER BY s.component_id"""),
+                {"h": hospital_id, "fin": fin},
+            )
+        ]

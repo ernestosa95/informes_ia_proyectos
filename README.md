@@ -2,10 +2,12 @@
 
 Módulo Python para generar reportes PDF de infraestructura (uptime,
 incidentes, térmica, tickets Asana) usando Gemini como motor de redacción.
+Las cifras las calcula el código; la IA sólo redacta. Arquitectura, estados y
+reintentos en [ARQUITECTURA.md](ARQUITECTURA.md).
 Pensado para integrarse como librería dentro de **TecnoMonitor** (u otro
 backend/dashboard), no para correr como script standalone.
 
-## Qué cambió respecto a la versión anterior
+## Qué cambió respecto a la versión 1 (script original)
 
 - **Sin credenciales hardcodeadas.** Todo sale de `.env` (ver `.env.example`).
   Las claves que estaban en el código y en `compiler.txt` deben rotarse:
@@ -19,6 +21,7 @@ backend/dashboard), no para correr como script standalone.
 - **Plantilla HTML** movida a `templates/reporte.html.j2` (antes era un
   string de Python de 80 líneas).
 - **Logging** en vez de `print()`.
+- (Ver más abajo las correcciones de la revisión del 2026-10-27, versión 2.1.0.)
 - Corregido un bug latente: la espera de `PROCESSING` en la subida de PDFs
   no releía el estado del archivo y podía quedar en loop infinito.
 
@@ -45,7 +48,10 @@ datetime o texto) quedan en `informes_ia/conexion.py`.
 pip install -r requirements-dev.txt
 python -m pytest tests                       # SQLite
 INFORMES_IA_TEST_PG_URL=postgresql:///base_vacia python -m pytest tests   # + Postgres
+python -m informes_ia.historial.prueba_flujo   # máquina de estados
 ```
+
+Gemini se reemplaza por un cliente falso: los tests no hacen llamadas reales.
 
 Los reportes de prueba copian la estructura del agente 4.5
 (`tecnomonitor-agent/agent_logic.py`). La base de Postgres de prueba se
@@ -193,6 +199,57 @@ Verificadas contra lo que guardan el agente y el server, con tests en `tests/`:
    cola máxima del período y los errores del período (aumento del contador
    `errored`, contemplando reinicios del canal).
 5. **Postgres**: ver "Base de datos".
+
+### Resto de la revisión (2026-10-27)
+
+6. **Errores de Gemini**: `ai_report` ya no se traga las excepciones. Error de
+   API -> `FalloRed` (respetando el `retryDelay` de un 429), texto que no es
+   JSON -> `RespuestaInvalida`. Cada tipo de fallo cuenta sus propios
+   reintentos (antes compartían contador).
+7. **Asana**: las tareas de continuación ("🔁 CONTINUACIÓN", cuando una alerta
+   llega al tope de comentarios) se clasifican como automáticas. Las fechas
+   del período se interpretan en hora argentina (antes como UTC: 3 h de corrimiento).
+8. **Módulos nuevos**: backups SQL (último backup por base aunque sea anterior
+   al período, umbral `sql_backup_max_hours`), CHECKDB, colas de autoenrute
+   DICOM, portal paciente y servicios detenidos (REQ-09).
+
+- **Cifras desde el código** (ver ARQUITECTURA.md > Contrato): uptime,
+  incidencias y métricas pisan lo que ponga la IA; la plantilla las muestra
+  desde `cifras`. El prompt prohíbe explicar algo que no esté en los datos y
+  el perfil "cliente" ya no pide un tono vendedor.
+- **Control de calidad**: `control_calidad` lista lo que faltó o conviene
+  verificar (uptime bajo, iDRAC sin datos, sin KPIs...). Va a la IA, al
+  borrador y al informe interno.
+- **SDK `google-genai`** (el anterior, `google-generativeai`, está sin
+  soporte), con JSON Schema forzado. El modelo que respondió queda en
+  `meta.modelo`. Tope de 120 s esperando que Gemini procese un manual.
+- **Un solo camino**: el modo sincrónico usa `PipelineReal`, igual que el asíncrono.
+- **Rutas**: la base propia va en `HISTORIAL_DB_FILENAME` (relativa a
+  `INFORMES_IA_BASE_DIR`), no en el directorio desde el que se corre.
+- **Imports a demanda**: WeasyPrint y Gemini se cargan al usarse; los
+  módulos de datos y la plantilla se pueden testear sin ellos.
+
+## Privacidad
+
+- Lo que va a Gemini: el resumen agregado (sin datos de pacientes), los casos
+  humanos de Asana (título, descripción, comentarios) y los manuales.
+- Los textos de Asana se anonimizan (`ASANA_ANONIMIZAR=1`): DNI, CUIL/CUIT,
+  mails y teléfonos se reemplazan por marcas. **Los nombres propios no se
+  detectan**: quien escribe en Asana no debería poner datos de pacientes.
+- Usar una API key de un proyecto de Gemini **con facturación**: en el nivel
+  gratuito Google puede usar los datos enviados para mejorar sus productos.
+- Los PDF no se versionan (`.gitignore`): un informe real tiene datos del
+  hospital. El repo de GitHub debería ser privado; el PDF de prueba de P03
+  quedó en el historial de commits anteriores.
+
+## Integración con TecnoMonitor (pendiente, a decidir)
+
+Hoy es un módulo aparte que lee la base del server. Integrarlo al server
+permitiría usar su sesión de base, su login y roles, su `asana_conector` y
+guardar los informes en Postgres en vez de un SQLite propio. Decisiones antes
+de hacerlo: quién puede pedir y aprobar informes (roles), si el worker corre
+dentro del proceso del server (hoy hay un solo worker de uvicorn) o aparte, y
+dónde se ve el borrador en el dashboard.
 
 ### TODOs documentados (decisiones tomadas con supuestos, a confirmar)
 

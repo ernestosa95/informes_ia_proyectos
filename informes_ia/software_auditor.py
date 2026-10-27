@@ -9,6 +9,12 @@ SoftwareAuditor: procesa `software_monitoring`, una tabla EAV donde
   estado (STARTED/STOPPED/...), la cola actual en metric_value (`queued`) y
   en extra_data los contadores acumulados recibidos/enviados/errored desde que
   arrancó el canal (main.py del server).
+- sql_integrity: DBCC CHECKDB tras un reinicio de SQL, una fila por base
+  (status OK/ERROR/NOT_ONLINE, metric_value = errores).
+- sql_backup: último backup completo por base; se lee aparte
+  (db.obtener_ultimos_backups) porque su fecha puede ser anterior al período.
+- dicom_routing: cola de cada regla de autoenrute (metric_value = pendientes).
+- patient_portal: estudios por estado de publicación del portal (metric_value).
 
 TODOs abiertos (documentados, sin resolver todavía — ver README):
 - No confirmado si `elasticsearch.metric_value` es un conteo acumulado
@@ -20,9 +26,10 @@ TODOs abiertos (documentados, sin resolver todavía — ver README):
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from .conexion import a_dict
+from .conexion import a_datetime, a_dict
 from .config_dinamica import ConfiguracionGlobal
 from .logging_utils import get_logger
 
@@ -49,16 +56,24 @@ def _rango_severidad(valor: str | None) -> int:
 
 
 def analizar_software(
-    filas: list[dict[str, Any]], config: ConfiguracionGlobal
+    filas: list[dict[str, Any]],
+    config: ConfiguracionGlobal,
+    backups: list[dict[str, Any]] | None = None,
+    fin: Any = None,
 ) -> dict[str, Any]:
     """
     filas: lista de dicts con las columnas crudas de `software_monitoring`
     (app_name, component_id, status_value, metric_value, extra_data,
     timestamp), ya ordenadas por timestamp ascendente, para UN hospital.
+    backups: último backup por base hasta el fin del período (db.obtener_ultimos_backups).
+    fin: fin del período, para calcular la antigüedad de los backups.
     """
     certificados: dict[str, dict[str, Any]] = {}
     alertas_es: dict[str, dict[str, Any]] = {}
     canales_mirth: dict[str, dict[str, Any]] = {}
+    checkdb: dict[str, dict[str, Any]] = {}
+    reglas_dicom: dict[str, dict[str, Any]] = {}
+    portal: dict[str, dict[str, Any]] = {}
 
     for fila in filas:
         app_name = fila.get("app_name")
@@ -118,6 +133,35 @@ def analizar_software(
             c["ultimo_error"] = extra.get("last_error") or None
             c["ultima_lectura"] = str(fila.get("timestamp"))
 
+        elif app_name == "sql_integrity":
+            base = fila.get("component_id") or "?"
+            checkdb[base] = {
+                "base": base,
+                "estado": fila.get("status_value"),
+                "errores": _entero(fila.get("metric_value")),
+                "fecha": str(fila.get("timestamp")),
+                "detalle": extra.get("detail") or None,
+            }
+
+        elif app_name == "dicom_routing":
+            regla = fila.get("component_id") or "?"
+            cola = _entero(fila.get("metric_value"))
+            r_ = reglas_dicom.setdefault(regla, {"regla": regla, "cola_maxima_periodo": 0})
+            r_["etiqueta"] = extra.get("label") or r_.get("etiqueta")
+            r_["cola_actual"] = cola
+            r_["cola_maxima_periodo"] = max(r_["cola_maxima_periodo"], cola)
+
+        elif app_name == "patient_portal":
+            estado = fila.get("component_id") or "?"
+            total = _entero(fila.get("metric_value"))
+            p_ = portal.setdefault(estado, {"estado": estado, "maximo_periodo": 0})
+            p_["descripcion"] = fila.get("status_value") or extra.get("state") or p_.get("descripcion")
+            p_["actual"] = total
+            p_["maximo_periodo"] = max(p_["maximo_periodo"], total)
+
+        elif app_name == "sql_backup":
+            pass  # se resuelve con `backups` (ver docstring)
+
         else:
             log.debug("app_name desconocido en software_monitoring: %s", app_name)
 
@@ -142,7 +186,37 @@ def analizar_software(
         if _rango_severidad(a["severidad_max"]) >= _rango_severidad("HIGH")
     ]
 
+    fin_dt = a_datetime(fin) or datetime.now()
+    estado_backups = []
+    for b in backups or []:
+        nunca = (b.get("status_value") or "").upper() == "NEVER"
+        fecha = a_datetime(b.get("timestamp"))
+        horas = None if nunca or fecha is None else round((fin_dt - fecha).total_seconds() / 3600, 1)
+        estado_backups.append({
+            "base": b.get("component_id"),
+            "ultimo_backup": None if nunca else str(fecha),
+            "horas_desde_el_backup": horas,
+            "alerta": nunca or (horas is not None and horas > config.sql_backup_max_hours),
+        })
+
     return {
+        "integridad_bases_checkdb": {
+            "bases_chequeadas": len(checkdb),
+            "con_problema": [c for c in checkdb.values() if (c["estado"] or "").upper() != "OK"],
+        } if checkdb else None,
+        "backups_sql": {
+            "umbral_horas": config.sql_backup_max_hours,
+            "bases": len(estado_backups),
+            "con_alerta": [b for b in estado_backups if b["alerta"]],
+        } if estado_backups else None,
+        "autoenrute_dicom": {
+            "reglas": len(reglas_dicom),
+            "con_cola": sorted(
+                (r_ for r_ in reglas_dicom.values() if r_["cola_maxima_periodo"] > 0),
+                key=lambda r_: r_["cola_maxima_periodo"], reverse=True,
+            )[:10],
+        } if reglas_dicom else None,
+        "portal_paciente": list(portal.values()) or None,
         "certificados_ssl": {
             "total_monitoreados": len(certificados),
             "con_alerta": certificados_alerta,

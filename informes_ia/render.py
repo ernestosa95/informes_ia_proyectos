@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from weasyprint import HTML
 
+from . import __version__
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -31,20 +31,32 @@ COLORES_POR_TIPO = {
 }
 
 
+def renderizar_html(data: dict[str, Any], grafico_uri: str | None = None) -> str:
+    """HTML del informe (sin WeasyPrint): sirve para previsualizar y para tests."""
+    meta = data.get("meta") or {}
+    tipo = meta.get("tipo", "interno")
+    color_main, titulo_doc = COLORES_POR_TIPO.get(tipo, COLORES_POR_TIPO["interno"])
+    pie = f"Generado por TecnoMonitor · informes_ia {__version__} · {tipo.upper()}"
+    if meta.get("modelo"):
+        pie += f" · redacción asistida por IA ({meta['modelo']})"
+    template = _env.get_template("reporte.html.j2")
+    return template.render(
+        data=data, grafico=grafico_uri, color=color_main, titulo=titulo_doc, pie=pie.replace('"', "'"),
+    )
+
+
 def renderizar_pdf_desde_json(
     data: dict[str, Any], ruta_grafico: Path | None, ruta_salida_pdf: Path
 ) -> Path:
     log.info("Renderizando PDF -> %s", ruta_salida_pdf)
 
-    tipo = data["meta"]["tipo"]
-    color_main, titulo_doc = COLORES_POR_TIPO.get(tipo, COLORES_POR_TIPO["interno"])
+    from weasyprint import HTML  # acá y no arriba: necesita librerías del sistema
 
     grafico_uri = None
     if ruta_grafico is not None and Path(ruta_grafico).exists():
         grafico_uri = "file://" + str(Path(ruta_grafico).resolve())
 
-    template = _env.get_template("reporte.html.j2")
-    html_content = template.render(data=data, grafico=grafico_uri, color=color_main, titulo=titulo_doc)
+    html_content = renderizar_html(data, grafico_uri)
 
     ruta_salida_pdf.parent.mkdir(parents=True, exist_ok=True)
     HTML(string=html_content).write_pdf(ruta_salida_pdf)
