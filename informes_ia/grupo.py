@@ -130,6 +130,7 @@ def _fila_hospital(
         fila["estudios_totales"] = None
 
     fila["motivos_atencion"] = _motivos(fila)
+    fila["recomendaciones_cliente"] = _recomendaciones_cliente(fila)
     return fila
 
 
@@ -153,6 +154,24 @@ def _motivos(f: dict[str, Any]) -> list[str]:
     if f["incidentes_abiertos_al_cierre"]:
         m.append(f"{f['incidentes_abiertos_al_cierre']} incidente(s) abierto(s) al cierre")
     return m
+
+
+def _recomendaciones_cliente(f: dict[str, Any]) -> list[str]:
+    """
+    Lo que se le puede decir al cliente sobre este hospital, como recomendación y no como
+    falla (audiencia.py). Los motivos operativos internos (canales detenidos, huecos de
+    monitoreo, incidentes abiertos) no tienen versión para el cliente.
+    """
+    rec: list[str] = []
+    if f.get("bases_sin_backup"):
+        rec.append("reforzar la política de resguardo (backups) de las bases de datos")
+    if f.get("bases_con_error_checkdb"):
+        rec.append("programar una revisión preventiva de integridad de las bases de datos")
+    if f.get("ssl_por_vencer"):
+        rec.append("renovar los certificados de seguridad próximos a vencer")
+    if f.get("incidentes_criticos"):
+        rec.append("evaluar el estado del equipamiento con eventos de hardware detectados")
+    return rec
 
 
 def generar_resumen_grupo(
@@ -204,9 +223,12 @@ def generar_resumen_grupo(
     if len(estudios) < len(con_datos):
         avisos.append(f"Sin KPIs de RIS/PACS en {len(con_datos) - len(estudios)} hospital(es): el total de estudios es parcial.")
 
+    comparacion = _comparacion_grupo(fuente, ids, fecha_inicio, fecha_fin, config, agregados)
+
     return {
         "periodo": {"desde": fecha_inicio, "hasta": fecha_fin},
         "grupo": {"id": grupo.get("id"), "nombre": grupo.get("nombre")},
+        "comparacion": comparacion,
         "agregados": agregados,
         "hospitales": filas,
         "hospitales_que_requieren_atencion": [
@@ -214,4 +236,33 @@ def generar_resumen_grupo(
             for f in atencion
         ],
         "control_calidad": avisos,
+    }
+
+
+def _comparacion_grupo(fuente, ids, inicio, fin, config, agregados) -> dict[str, Any] | None:
+    """Agregados del período anterior de igual duración (fuentes livianas)."""
+    from .preprocess import cifras_periodo, periodo_anterior
+    try:
+        ini_ant, fin_ant = periodo_anterior(inicio, fin)
+        previas = [cifras_periodo(fuente, hid, ini_ant, fin_ant, config) for hid in ids]
+    except Exception:
+        log.exception("No se pudo comparar el grupo con el período anterior")
+        return None
+    con_datos = [p for p in previas if p["reportes"]]
+    if not con_datos:
+        return None
+    uptimes = [p["uptime_pct"] for p in con_datos if p["uptime_pct"] is not None]
+    estudios = [p["estudios_totales"] for p in con_datos if p["estudios_totales"] is not None]
+    return {
+        "periodo_anterior": {"desde": ini_ant, "hasta": fin_ant},
+        "anterior": {
+            "uptime_promedio_pct": round(sum(uptimes) / len(uptimes), 2) if uptimes else None,
+            "incidentes_totales": sum(p["alertas"] for p in con_datos),
+            "estudios_totales": sum(estudios) if estudios else None,
+        },
+        "actual": {
+            "uptime_promedio_pct": agregados["uptime_promedio_pct"],
+            "incidentes_totales": agregados["incidentes_totales"],
+            "estudios_totales": agregados["estudios_totales"],
+        },
     }

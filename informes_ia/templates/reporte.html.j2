@@ -66,6 +66,25 @@
     </tr></table>
     {% if grafico %}<div style="text-align: center; margin-top: 10px;"><img src="{{ grafico }}"></div>{% endif %}
 
+    {% set comp = data.comparacion %}
+    {% if comp and comp.anterior %}
+    <h3>Comparación con el período anterior ({{ comp.periodo_anterior.desde[:10] }} al {{ comp.periodo_anterior.hasta[:10] }})</h3>
+    <table class="det">
+        <tr><th></th><th>Período anterior</th><th>Este período</th></tr>
+        {% set clave_up = 'uptime_promedio_pct' if comp.anterior.uptime_promedio_pct is defined else 'uptime_pct' %}
+        <tr><td>Disponibilidad</td>
+            <td>{{ '%.2f'|format(comp.anterior[clave_up]) ~ '%' if comp.anterior[clave_up] is not none else 's/d' }}</td>
+            <td>{{ '%.2f'|format(comp.actual[clave_up]) ~ '%' if comp.actual[clave_up] is not none else 's/d' }}</td></tr>
+        <tr><td>Estudios (RIS)</td>
+            <td>{{ comp.anterior.estudios_totales if comp.anterior.estudios_totales is not none else 's/d' }}</td>
+            <td>{{ comp.actual.estudios_totales if comp.actual.estudios_totales is not none else 's/d' }}</td></tr>
+        {% if data.meta.tipo == 'interno' %}
+        {% set clave_inc = 'incidentes_totales' if comp.anterior.incidentes_totales is defined else 'alertas' %}
+        <tr><td>Alertas / incidentes</td><td>{{ comp.anterior[clave_inc] }}</td><td>{{ comp.actual[clave_inc] }}</td></tr>
+        {% endif %}
+    </table>
+    {% endif %}
+
     <h2>2. Estado de la Infraestructura</h2>
     <h3>Energía</h3><p style="margin: 0;">{{ data.infraestructura.energia }}</p>
     <h3>Térmica</h3><p style="margin: 0;">{{ data.infraestructura.termica }}</p>
@@ -76,7 +95,7 @@
         <td class="inc-ext"><span class="num">{{ data.incidencias.externas }}</span>
             <span style="font-size:10px; text-transform:uppercase">Casos de gestión (Asana)</span></td>
         <td class="inc-int"><span class="num">{{ data.incidencias.internas }}</span>
-            <span style="font-size:10px; text-transform:uppercase">Eventos detectados por el monitoreo</span></td>
+            <span style="font-size:10px; text-transform:uppercase">Eventos detectados {{ 'y gestionados' if data.meta.tipo == 'cliente' else 'por el monitoreo' }}</span></td>
     </tr></table>
     <div class="nota"><strong>Análisis:</strong> {{ data.incidencias.analisis }}</div>
 
@@ -90,8 +109,23 @@
         <p style="margin: 2px 0 0 0;">{{ data.recomendacion }}</p>
     </div>
 
+
+    {% if data.meta.tipo == 'interno' and data.puntos_a_revisar %}
+    <h2>Puntos a revisar</h2>
+    <table class="det">
+        {% for linea in data.puntos_a_revisar.splitlines() if linea.strip() %}
+        {% set l = linea.strip().lstrip('-• ') %}
+        <tr><td style="width: 52px;">
+            {% if l.startswith('[ALTA]') %}<span style="color:#c0392b;font-weight:bold">ALTA</span>
+            {% elif l.startswith('[MEDIA]') %}<span style="color:#e67e22;font-weight:bold">MEDIA</span>
+            {% elif l.startswith('[BAJA]') %}<span style="color:#7f8c8d;font-weight:bold">BAJA</span>{% endif %}</td>
+            <td>{{ l.split(']', 1)[1].strip() if l.startswith('[') and ']' in l else l }}</td></tr>
+        {% endfor %}
+    </table>
+    {% endif %}
+
     {% if data.meta.tipo == 'interno' %}
-    <h2>5. Detalle técnico</h2>
+    <h2>Detalle técnico</h2>
     {% if data.control_calidad %}
     <div class="control"><strong>Control de calidad de los datos</strong>
         <ul style="margin: 4px 0 0 0;">{% for a in data.control_calidad %}<li>{{ a }}</li>{% endfor %}</ul>

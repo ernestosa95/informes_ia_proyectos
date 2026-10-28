@@ -29,6 +29,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
+from . import audiencia
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -43,25 +44,38 @@ class PerfilReporte:
 
 PERFILES: dict[str, PerfilReporte] = {
     "cliente": PerfilReporte(
-        rol="GERENTE DE CUENTAS (CUSTOMER SUCCESS)",
+        rol="RESPONSABLE DE CUENTA (CUSTOMER SUCCESS)",
         tono=(
-            "Claro, cordial y profesional, para una dirección de hospital. NO técnico. "
-            "Positivo cuando los datos lo justifican; si hubo problemas, se dicen con "
-            "claridad junto con lo que se hizo o se recomienda."
+            "Claro, cordial y profesional, para la dirección de un hospital. Sin jerga técnica. "
+            "Pone en valor el servicio con datos concretos (disponibilidad, actividad, incidentes "
+            "gestionados) y presenta los riesgos del hospital como recomendaciones."
         ),
         instrucciones="""
-        - Resumen Ejecutivo: disponibilidad del período y los hechos más relevantes.
-        - Gestión de Incidencias: qué detectó TecnoMonitor y cómo se gestionó.
-        - Recomendaciones: sugerencias concretas que se desprendan de los datos (ej: ampliar un disco que está cerca del límite).
+        - resumen.texto: disponibilidad del período y los dos o tres hechos más relevantes, con cifras.
+        - infraestructura.energia / termica / mensaje: estado del equipamiento físico y del entorno,
+          en lenguaje de gestión; si no hay datos de un área, no la menciones.
+        - incidencias.analisis: cuántos incidentes detectó y gestionó el servicio y en qué áreas;
+          si hubo casos de gestión del hospital, cuáles se atendieron.
+        - calidad.estabilidad: tendencia frente al período anterior si la hay; si no, estabilidad del período.
+        - calidad.caso_destacado: un hecho concreto que muestre el valor del servicio.
+        - recomendacion: las recomendaciones_sugeridas, priorizadas y explicadas para la dirección.
         """,
     ),
     "interno": PerfilReporte(
-        rol="INGENIERO SRE SENIOR",
-        tono="Crudo, directo, técnico. Enfocado en logs, errores y hardware.",
+        rol="INGENIERO SRE SENIOR DEL EQUIPO DE TECNOMONITOR",
+        tono="Técnico, directo y preciso. Para el equipo propio: incluye lo que hay que mejorar.",
         instrucciones="""
-        - Resumen Ejecutivo: Estado real del cluster.
-        - Gestión de Incidencias: Lista de errores exactos.
-        - Recomendaciones: Acciones inmediatas (ej: reiniciar servicio X, cambiar disco Y).
+        - resumen.texto: estado real del hospital en el período, con cifras.
+        - infraestructura.energia / termica / mensaje: hallazgos de hardware, temperatura, red y
+          capacidad con identificadores y duraciones.
+        - incidencias.analisis: eventos por tipo (cantidad, minutos, abiertos al cierre), software
+          (Mirth, backups, CHECKDB, DICOM, portal) y casos de Asana relevantes.
+        - calidad.estabilidad: comparación con el período anterior y patrones (recurrencias, horarios).
+        - calidad.caso_destacado: el incidente o hallazgo más importante, con su detalle.
+        - puntos_a_revisar: una línea por punto, de mayor a menor prioridad, con el formato
+          "[ALTA|MEDIA|BAJA] tema — detalle con datos → acción concreta". Incluí también lo que
+          dependa de nosotros (monitoreo, agente, configuración, datos faltantes del control de calidad).
+        - recomendacion: las acciones inmediatas más importantes.
         """,
     ),
 }
@@ -69,14 +83,15 @@ PERFILES: dict[str, PerfilReporte] = {
 # Reglas que valen para cualquier perfil.
 REGLAS_DE_DATOS = """
 REGLAS SOBRE LOS DATOS (obligatorias, por encima del tono):
-- Usá sólo lo que está en el resumen y en los casos de Asana. No supongas causas,
-  proyectos, migraciones, personas ni hechos que no figuren ahí.
-- No escribas cifras (uptime, cantidades, porcentajes) que no estén en el resumen;
-  las cifras del informe las completa el sistema.
-- Si una sección del resumen viene en null o figura en "control_calidad" como sin
-  datos, decí que no hay datos para ese punto. No la des por buena.
-- Si un valor parece incorrecto o contradictorio, no lo expliques: limitate a no
-  destacarlo.
+- Usá sólo lo que está en los DATOS DEL PERÍODO. No supongas causas, proyectos,
+  migraciones, personas ni hechos que no figuren ahí.
+- Podés citar cifras que estén en los datos, tal cual (redondeadas a lo sumo a un
+  decimal). No inventes ni calcules cifras nuevas: totales, cifras clave y tabla los
+  completa el sistema.
+- Si un área no tiene datos (null, vacía o listada como no disponible), no afirmes nada
+  sobre ella: en un informe interno decí que faltan datos; en uno para el cliente, omitila.
+- Si un valor parece contradictorio, no lo expliques ni lo destaques.
+- Tendencias: sólo con el bloque "comparacion"; sin él, no hables de mejora o empeoramiento.
 """
 
 # Estructura que la IA debe devolver (JSON Schema, forzado por la API).
@@ -118,6 +133,13 @@ ESQUEMA_RESPUESTA: dict[str, Any] = {
 }
 
 
+def _con_puntos_a_revisar(esquema: dict[str, Any]) -> dict[str, Any]:
+    """El mismo esquema más el campo `puntos_a_revisar` (sólo informes internos)."""
+    nuevo = {**esquema, "properties": {**esquema["properties"], "puntos_a_revisar": {"type": "string"}}}
+    nuevo["required"] = [*esquema["required"], "puntos_a_revisar"]
+    return nuevo
+
+
 class TipoReporteInvalido(ValueError):
     pass
 
@@ -156,47 +178,28 @@ def _construir_prompt(
     asana_casos: dict[str, list[str]],
     hospital_nombre: str,
     tipo_reporte: str,
+    hospital_id: str | None = None,
 ) -> str:
     perfil = PERFILES.get(tipo_reporte)
     if perfil is None:
         raise TipoReporteInvalido(
             f"Tipo de reporte '{tipo_reporte}' no reconocido. Opciones: {list(PERFILES)}"
         )
-
-    resumen_json = json.dumps(resumen, ensure_ascii=False, default=str)
-
-    humanos = asana_casos.get("humanos", [])
-    automaticos = asana_casos.get("automaticos", [])
-
-    bloque_humanos = "\n\n".join(humanos) if humanos else "(sin casos de gestión en el período)"
-    bloque_automaticos = "\n".join(automaticos) if automaticos else "(ninguno)"
-
+    vista = audiencia.vista_individual(resumen, asana_casos, tipo_reporte,
+                                       {"id": hospital_id, "nombre": hospital_nombre})
     return f"""
-    ACTÚA COMO UN {perfil.rol} DE "TECNOMONITOR".
-    Redactá los textos del reporte {tipo_reporte} de {hospital_nombre}.
+    ACTÚA COMO {perfil.rol} DE "TECNOMONITOR", el servicio de monitoreo de la
+    infraestructura tecnológica y de los sistemas clínicos del hospital.
+    Redactá los textos del informe {tipo_reporte.upper()} de {hospital_nombre}.
     TONO: {perfil.tono}
     {REGLAS_DE_DATOS}
-    A continuación tenés el RESUMEN PRE-PROCESADO del período (infraestructura,
-    actividad clínica RIS/PACS y estado de software). Ya viene agregado y
-    filtrado — no es la telemetría cruda. Usalo como única fuente de datos:
+    {audiencia.VOCABULARIO[tipo_reporte]}
+    {audiencia.diccionario(tipo_reporte)}
+    DATOS DEL PERÍODO (ya calculados por el sistema; son tu única fuente):
 
-    {resumen_json}
+    {json.dumps(vista, ensure_ascii=False, default=str)}
 
-    ── CASOS DE GESTIÓN (Asana, escritos por personas) ──
-    Son pedidos, seguimientos y gestiones reales del cliente/equipo. ESTE es
-    el contexto de negocio relevante. Hay {len(humanos)} en el período:
-
-    {bloque_humanos}
-
-    ── INCIDENTES AUTOGESTIONADOS (Asana, generados por TecnoMonitor) ──
-    Tickets que el propio sistema abrió y cerró automáticamente. YA están
-    reflejados en el resumen de infraestructura de arriba — NO los cuentes
-    como reclamos del cliente ni los dupliques en el análisis. Se listan
-    sólo como referencia de que el monitoreo actuó:
-
-    {bloque_automaticos}
-
-    INSTRUCCIONES ESPECÍFICAS:
+    QUÉ ESCRIBIR EN CADA CAMPO:
     {perfil.instrucciones}
 
     En "meta" poné tipo "{tipo_reporte}", fecha "{datetime.now().strftime('%d/%m/%Y')}" y
@@ -212,6 +215,7 @@ def generar_json_con_ia(
     pdfs: list[Any],
     tipo_reporte: str,
     model_name: str,
+    hospital_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Devuelve el JSON de textos de la IA (sin cifras: ver completar_con_cifras).
@@ -219,8 +223,10 @@ def generar_json_con_ia(
     """
     log.info("Generando JSON del informe (%s) con modelo %s", tipo_reporte, model_name)
 
-    prompt = _construir_prompt(resumen, asana_casos, hospital_nombre, tipo_reporte)
-    return _llamar_gemini(client, [prompt, *pdfs], ESQUEMA_RESPUESTA, model_name)
+    prompt = _construir_prompt(resumen, asana_casos, hospital_nombre, tipo_reporte, hospital_id)
+    esquema = _con_puntos_a_revisar(ESQUEMA_RESPUESTA) if tipo_reporte == audiencia.INTERNO else ESQUEMA_RESPUESTA
+    log.info("Prompt de %d caracteres (%s)", len(prompt), tipo_reporte)
+    return _llamar_gemini(client, [prompt, *pdfs], esquema, model_name)
 
 
 def _llamar_gemini(
@@ -230,7 +236,7 @@ def _llamar_gemini(
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_json_schema=esquema,
-        temperature=0.4,
+        temperature=0.2,   # bajo: el informe tiene que ser fiel a los datos, no creativo
     )
 
     try:
@@ -283,9 +289,11 @@ def completar_con_cifras(
     incid["internas"] = len(eventos)
 
     metricas = infra.get("metricas") or {}
+    tipo = (data.get("meta") or {}).get("tipo", audiencia.INTERNO)
     data["cifras"] = {
         "uptime_pct": infra.get("uptime_pct"),
-        "uptime_definicion": infra.get("uptime_definicion"),
+        "uptime_definicion": (infra.get("uptime_definicion") if tipo == audiencia.INTERNO
+                              else "porcentaje del período con los sistemas monitoreados en línea"),
         "huecos_sin_reportes": (infra.get("huecos_sin_reportes") or {}).get("cantidad"),
         "cpu_host_promedio_pct": (metricas.get("cpu_host") or {}).get("avg"),
         "ram_host_promedio_pct": (metricas.get("ram_host") or {}).get("avg"),
@@ -296,7 +304,8 @@ def completar_con_cifras(
         "bases_sin_backup_reciente": len((software.get("backups_sql") or {}).get("con_alerta") or []),
         "certificados_ssl_con_alerta": len((software.get("certificados_ssl") or {}).get("con_alerta") or []),
     }
-    data["control_calidad"] = resumen.get("control_calidad") or []
+    data["comparacion"] = resumen.get("comparacion")
+    data["control_calidad"] = (resumen.get("control_calidad") or []) + audiencia.revisar_vocabulario(data, tipo)
     return data
 
 
@@ -329,28 +338,41 @@ def _construir_prompt_grupo(resumen: dict[str, Any], tipo_reporte: str) -> str:
             f"Tipo de reporte '{tipo_reporte}' no reconocido. Opciones: {list(PERFILES)}"
         )
     nombre = (resumen.get("grupo") or {}).get("nombre") or "el grupo"
+    vista = audiencia.vista_grupo(resumen, tipo_reporte)
+    if tipo_reporte == audiencia.CLIENTE:
+        campos = """
+    - resumen.texto: estado del conjunto en el período, en dos o tres oraciones con cifras.
+    - situacion_general: disponibilidad, incidentes gestionados y actividad clínica del grupo, con la
+      tendencia frente al período anterior si la hay. Destacá los hospitales con mejor desempeño.
+    - hospitales_atencion: RECOMENDACIONES POR HOSPITAL, sólo para los que tienen
+      recomendaciones_sugeridas, en tono constructivo. Si ninguno tiene, decí que no hay
+      recomendaciones particulares.
+    - recomendacion: recomendaciones para el conjunto, priorizadas."""
+    else:
+        campos = """
+    - resumen.texto: estado real del grupo en el período, con cifras.
+    - situacion_general: disponibilidad, incidentes (críticos y abiertos al cierre), software y actividad,
+      con patrones comunes (varios hospitales con el mismo problema) y comparación con el período anterior.
+    - hospitales_atencion: los de "hospitales_que_requieren_atencion", del más al menos urgente, con sus
+      motivos y datos.
+    - puntos_a_revisar: una línea por punto, "[ALTA|MEDIA|BAJA] hospital/tema — detalle → acción",
+      incluyendo lo que dependa de nosotros y los datos faltantes del control de calidad.
+    - recomendacion: acciones inmediatas para el grupo."""
     return f"""
-    ACTÚA COMO UN {perfil.rol} DE "TECNOMONITOR".
-    Redactá los textos del reporte {tipo_reporte} CONSOLIDADO del grupo de hospitales "{nombre}".
+    ACTÚA COMO {perfil.rol} DE "TECNOMONITOR".
+    Redactá los textos del informe {tipo_reporte.upper()} CONSOLIDADO del grupo de hospitales "{nombre}".
     TONO: {perfil.tono}
     {REGLAS_DE_DATOS}
-    El informe se publica con una TABLA de una fila por hospital (la arma el sistema
-    con los mismos datos que ves abajo). No la repitas: los textos tienen que dar la
-    lectura de conjunto y lo que importa.
+    {audiencia.VOCABULARIO[tipo_reporte]}
+    {audiencia.diccionario(tipo_reporte)}
+    El informe se publica con una TABLA de una fila por hospital (la arma el sistema con los
+    mismos datos). No la repitas: los textos dan la lectura de conjunto y lo que importa.
 
-    DATOS DEL GRUPO (agregados, una fila por hospital, hospitales que requieren
-    atención con sus motivos, y control de calidad de los datos):
+    DATOS DEL GRUPO:
 
-    {json.dumps(resumen, ensure_ascii=False, default=str)}
+    {json.dumps(vista, ensure_ascii=False, default=str)}
 
-    QUÉ ESCRIBIR:
-    - resumen.texto: estado del grupo en el período, en dos o tres oraciones.
-    - situacion_general: cómo estuvo el conjunto (disponibilidad, incidentes, software,
-      actividad clínica), con patrones comunes si los hay (ej. varios hospitales con el
-      mismo problema).
-    - hospitales_atencion: los hospitales de "hospitales_que_requieren_atencion", del
-      más al menos urgente, con sus motivos en lenguaje claro. Si no hay, decilo.
-    - recomendacion: acciones concretas para el grupo, priorizadas.
+    QUÉ ESCRIBIR:{campos}
 
     En "meta" poné tipo "{tipo_reporte}", fecha "{datetime.now().strftime('%d/%m/%Y')}" y
     hospital "{nombre}".
@@ -363,7 +385,10 @@ def generar_json_grupo(
     """Textos del informe de grupo. Lanza ErrorAPIGemini o RespuestaNoJSON."""
     log.info("Generando JSON del informe de grupo (%s) con modelo %s", tipo_reporte, model_name)
     prompt = _construir_prompt_grupo(resumen, tipo_reporte)
-    return _llamar_gemini(client, [prompt], ESQUEMA_RESPUESTA_GRUPO, model_name)
+    esquema = (_con_puntos_a_revisar(ESQUEMA_RESPUESTA_GRUPO) if tipo_reporte == audiencia.INTERNO
+               else ESQUEMA_RESPUESTA_GRUPO)
+    log.info("Prompt de grupo de %d caracteres (%s)", len(prompt), tipo_reporte)
+    return _llamar_gemini(client, [prompt], esquema, model_name)
 
 
 def completar_con_cifras_grupo(data: dict[str, Any], resumen: dict[str, Any]) -> dict[str, Any]:
@@ -388,8 +413,11 @@ def completar_con_cifras_grupo(data: dict[str, Any], resumen: dict[str, Any]) ->
             "mirth_detenidos": f.get("mirth_detenidos"),
             "estudios_totales": f.get("estudios_totales"),
             "motivos_atencion": f.get("motivos_atencion") or [],
+            "recomendaciones_cliente": f.get("recomendaciones_cliente") or [],
         }
         for f in resumen.get("hospitales") or []
     ]
-    data["control_calidad"] = resumen.get("control_calidad") or []
+    data["comparacion"] = resumen.get("comparacion")
+    tipo = meta.get("tipo", audiencia.INTERNO)
+    data["control_calidad"] = (resumen.get("control_calidad") or []) + audiencia.revisar_vocabulario(data, tipo)
     return data

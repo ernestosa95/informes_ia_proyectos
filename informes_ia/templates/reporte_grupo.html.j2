@@ -59,32 +59,77 @@
     <h2>1. Visión del grupo</h2>
     <table class="cifras"><tr>
         <td><span class="val">{{ c.hospitales }}</span><span class="lbl">Hospitales</span></td>
-        <td><span class="val">{{ c.hospitales_que_requieren_atencion }}</span><span class="lbl">Requieren atención</span></td>
-        <td><span class="val">{{ c.incidentes_criticos_totales }}</span><span class="lbl">Incidentes críticos</span></td>
+        <td><span class="val">{{ c.hospitales_que_requieren_atencion if data.meta.tipo == 'interno' else ((data.tabla_hospitales or [])|selectattr('recomendaciones_cliente')|list|length) }}</span><span class="lbl">{{ 'Requieren atención' if data.meta.tipo == 'interno' else 'Con recomendaciones' }}</span></td>
+        <td><span class="val">{{ c.incidentes_criticos_totales if data.meta.tipo == 'interno' else c.incidentes_totales }}</span><span class="lbl">{{ 'Incidentes críticos' if data.meta.tipo == 'interno' else 'Incidentes gestionados' }}</span></td>
         <td><span class="val">{{ '{:,}'.format(c.estudios_totales).replace(',', '.') if c.estudios_totales is not none else 's/d' }}</span><span class="lbl">Estudios (RIS)</span></td>
     </tr></table>
     <p style="margin-top: 10px;">{{ data.situacion_general }}</p>
     {% if grafico %}<div style="text-align: center; margin-top: 10px;"><img src="{{ grafico }}"></div>{% endif %}
 
-    <h2>2. Hospitales que requieren atención</h2>
+    {% set comp = data.comparacion %}
+    {% if comp and comp.anterior %}
+    <h3>Comparación con el período anterior ({{ comp.periodo_anterior.desde[:10] }} al {{ comp.periodo_anterior.hasta[:10] }})</h3>
+    <table class="det">
+        <tr><th></th><th>Período anterior</th><th>Este período</th></tr>
+        {% set clave_up = 'uptime_promedio_pct' if comp.anterior.uptime_promedio_pct is defined else 'uptime_pct' %}
+        <tr><td>Disponibilidad</td>
+            <td>{{ '%.2f'|format(comp.anterior[clave_up]) ~ '%' if comp.anterior[clave_up] is not none else 's/d' }}</td>
+            <td>{{ '%.2f'|format(comp.actual[clave_up]) ~ '%' if comp.actual[clave_up] is not none else 's/d' }}</td></tr>
+        <tr><td>Estudios (RIS)</td>
+            <td>{{ comp.anterior.estudios_totales if comp.anterior.estudios_totales is not none else 's/d' }}</td>
+            <td>{{ comp.actual.estudios_totales if comp.actual.estudios_totales is not none else 's/d' }}</td></tr>
+        {% if data.meta.tipo == 'interno' %}
+        {% set clave_inc = 'incidentes_totales' if comp.anterior.incidentes_totales is defined else 'alertas' %}
+        <tr><td>Alertas / incidentes</td><td>{{ comp.anterior[clave_inc] }}</td><td>{{ comp.actual[clave_inc] }}</td></tr>
+        {% endif %}
+    </table>
+    {% endif %}
+
+    {% set interno = data.meta.tipo == 'interno' %}
+    <h2>2. {{ 'Hospitales que requieren atención' if interno else 'Recomendaciones por hospital' }}</h2>
     <p>{{ data.hospitales_atencion }}</p>
 
     <h2>3. Detalle por hospital</h2>
     <table class="det">
+        {% if interno %}
         <tr><th>Hospital</th><th>Disponibilidad</th><th>Incidentes (críticos)</th><th>Bases sin backup</th>
             <th>Mirth detenidos</th><th>Estudios</th><th>Atención</th></tr>
+        {% else %}
+        <tr><th>Hospital</th><th>Disponibilidad</th><th>Incidentes gestionados</th><th>Estudios</th><th>Recomendaciones</th></tr>
+        {% endif %}
         {% for h in data.tabla_hospitales or [] %}
         <tr>
             <td><strong>{{ h.hospital_id }}</strong> {{ h.nombre }}</td>
             <td>{{ '%.2f'|format(h.uptime_pct) ~ '%' if h.uptime_pct is not none else 's/d' }}</td>
+            {% if interno %}
             <td>{{ h.incidentes if h.incidentes is not none else 's/d' }}{% if h.incidentes_criticos %} ({{ h.incidentes_criticos }}){% endif %}</td>
             <td>{{ h.bases_sin_backup if h.bases_sin_backup is not none else 's/d' }}</td>
             <td>{{ h.mirth_detenidos if h.mirth_detenidos is not none else 's/d' }}</td>
             <td>{{ h.estudios_totales if h.estudios_totales is not none else 's/d' }}</td>
             <td>{% if h.motivos_atencion %}<span style="color:#c0392b">{{ h.motivos_atencion|join('; ') }}</span>{% else %}—{% endif %}</td>
+            {% else %}
+            <td>{{ h.incidentes if h.incidentes is not none else 's/d' }}</td>
+            <td>{{ h.estudios_totales if h.estudios_totales is not none else 's/d' }}</td>
+            <td>{{ h.recomendaciones_cliente|join('; ') if h.recomendaciones_cliente else '—' }}</td>
+            {% endif %}
         </tr>
         {% endfor %}
     </table>
+
+
+    {% if data.meta.tipo == 'interno' and data.puntos_a_revisar %}
+    <h2>Puntos a revisar</h2>
+    <table class="det">
+        {% for linea in data.puntos_a_revisar.splitlines() if linea.strip() %}
+        {% set l = linea.strip().lstrip('-• ') %}
+        <tr><td style="width: 52px;">
+            {% if l.startswith('[ALTA]') %}<span style="color:#c0392b;font-weight:bold">ALTA</span>
+            {% elif l.startswith('[MEDIA]') %}<span style="color:#e67e22;font-weight:bold">MEDIA</span>
+            {% elif l.startswith('[BAJA]') %}<span style="color:#7f8c8d;font-weight:bold">BAJA</span>{% endif %}</td>
+            <td>{{ l.split(']', 1)[1].strip() if l.startswith('[') and ']' in l else l }}</td></tr>
+        {% endfor %}
+    </table>
+    {% endif %}
 
     <h2>4. Recomendaciones</h2>
     <div class="reco"><p style="margin: 2px 0 0 0;">{{ data.recomendacion }}</p></div>

@@ -84,6 +84,7 @@ def generar_resumen(
         "actividad_clinica": clinico,
         "software": software,
     }
+    resumen["comparacion"] = comparacion_periodo_anterior(fuente, hospital_id, fecha_inicio, fecha_fin, config)
     resumen["control_calidad"] = control_calidad(resumen)
     return resumen
 
@@ -124,3 +125,52 @@ def control_calidad(resumen: dict[str, Any]) -> list[str]:
     if not resumen.get("software"):
         avisos.append("Sin datos de software (Mirth, SSL, backups, CHECKDB) en el período.")
     return avisos
+
+
+def cifras_periodo(fuente, hospital_id: str, inicio: str, fin: str, config: ConfiguracionGlobal) -> dict[str, Any]:
+    """
+    Cifras básicas de un período con fuentes livianas (horas de reporte, alertas y KPIs),
+    para comparar con el período anterior sin releer los reportes completos.
+    """
+    from .conexion import a_datetime
+    from .event_tracker import cobertura
+
+    horas = db.obtener_horas_reporte(fuente, hospital_id, inicio, fin)
+    uptime, _ = cobertura(horas, a_datetime(inicio), a_datetime(fin), config.offline_minutes)
+    alertas = [a for a in db.obtener_alertas(fuente, hospital_id, inicio, fin)
+               if not str(a.get("mensaje") or "").startswith("[BAJA]")]
+    uso = db.obtener_uso_crudo(fuente, hospital_id, inicio, fin)
+    estudios = None
+    if uso:
+        mods = backlog_analyzer.analizar_uso(uso, config).get("actividad_por_modalidad") or {}
+        estudios = sum(m.get("totales", 0) for m in mods.values())
+    return {"uptime_pct": uptime, "alertas": len(alertas), "estudios_totales": estudios, "reportes": len(horas)}
+
+
+def periodo_anterior(inicio: str, fin: str) -> tuple[str, str]:
+    """
+    El período de igual duración inmediatamente anterior. Termina un segundo antes del
+    inicio: los límites son inclusivos y el reporte del instante de inicio es del período actual.
+    """
+    from datetime import timedelta
+
+    from .conexion import a_datetime
+    d0, d1 = a_datetime(inicio), a_datetime(fin)
+    largo = d1 - d0
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (d0 - largo).strftime(fmt), (d0 - timedelta(seconds=1)).strftime(fmt)
+
+
+def comparacion_periodo_anterior(fuente, hospital_id: str, inicio: str, fin: str,
+                                 config: ConfiguracionGlobal) -> dict[str, Any] | None:
+    """Cifras del período y del anterior, para que la IA hable de tendencia con datos."""
+    try:
+        ini_ant, fin_ant = periodo_anterior(inicio, fin)
+        anterior = cifras_periodo(fuente, hospital_id, ini_ant, fin_ant, config)
+        actual = cifras_periodo(fuente, hospital_id, inicio, fin, config)
+    except Exception:
+        log.exception("No se pudo comparar con el período anterior de %s", hospital_id)
+        return None
+    if not anterior["reportes"]:
+        return None   # sin datos del período anterior (hospital nuevo): no hay comparación
+    return {"periodo_anterior": {"desde": ini_ant, "hasta": fin_ant}, "anterior": anterior, "actual": actual}

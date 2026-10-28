@@ -56,6 +56,7 @@ class ContextoReporte:
     tipo_reporte: str
     # Informe de grupo: {"id", "nombre", "hospital_ids"}. None = informe de un hospital.
     grupo: dict[str, Any] | None = None
+    hospital_id: str | None = None
 
 
 class PipelineReal:
@@ -130,7 +131,7 @@ class PipelineReal:
         return ContextoReporte(
             resumen=resumen, asana_txt=asana_txt,
             hospital_nombre=config_hospital["nombre"], pdfs=pdfs,
-            tipo_reporte=tipo_reporte,
+            tipo_reporte=tipo_reporte, hospital_id=hospital_id,
         )
 
     def _preparar_contexto_grupo(self, peticion: dict[str, Any]) -> ContextoReporte:
@@ -173,7 +174,7 @@ class PipelineReal:
                 data = ai_report.generar_json_con_ia(
                     self.client, contexto.resumen, contexto.asana_txt, contexto.hospital_nombre,
                     contexto.pdfs, contexto.tipo_reporte,
-                    model_name=self.settings.gemini_model_json,
+                    model_name=self.settings.gemini_model_json, hospital_id=contexto.hospital_id,
                 )
         except ai_report.ErrorAPIGemini as e:
             raise FalloRed(str(e), retry_delay_s=e.retry_delay_s) from e
