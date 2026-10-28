@@ -36,11 +36,16 @@ cp .env.example .env
 
 ### Base de datos
 
-Lee la base de TecnoMonitor en **Postgres** (producción desde el 05/10/2026)
-o en un archivo **SQLite** (laboratorio): con `DATABASE_URL` definida usa esa
-URL, si no, el archivo `DB_FILENAME`. Mismo criterio que `database.py` del
-server. Las diferencias entre motores (JSON como dict o texto, fechas como
-datetime o texto) quedan en `informes_ia/conexion.py`.
+El módulo lee a través de una **fuente de datos** (`informes_ia/fuentes.py`):
+
+- **En producción** (dentro del server) el server inyecta `FuenteServer`, que lee el
+  Postgres real con su capa `datos/`. Ver `tecnomonitor-server/docs/25-informes-ia.md`.
+- **En laboratorio** (CLI, `prueba_lab`) se usa `FuenteSQL` sobre una copia de la base
+  VIEJA de TecnoMonitor (SQLite con `reportes_historicos`): `DB_FILENAME` o `DATABASE_URL`.
+  No sirve contra el Postgres de producción, que tiene otro esquema.
+
+> Corrección del 2026-10-28: la versión 2.1.0 decía leer "Postgres" con `DATABASE_URL`,
+> pero consultaba las tablas del esquema viejo, que en el Postgres de producción no existen.
 
 ### Tests
 
@@ -229,6 +234,16 @@ Verificadas contra lo que guardan el agente y el server, con tests en `tests/`:
 - **Imports a demanda**: WeasyPrint y Gemini se cargan al usarse; los
   módulos de datos y la plantilla se pueden testear sin ellos.
 
+## Grupos, programaciones y público (versión 2.2.0)
+
+- **Informes de grupo** (`grupo.py`): una provincia, los de PAMI… Consolidado + tabla por
+  hospital, una sola llamada a la IA, con fuentes livianas.
+- **Público** (`audiencia.py`): `cliente` o `interno` reciben vistas distintas de los datos,
+  vocabulario propio y, el interno, `puntos_a_revisar`. Control de vocabulario sobre el texto
+  para el cliente. Comparación con el período anterior y diccionario de datos en el prompt.
+- **Programaciones y Asana**: viven en el server (`docs/25`); el módulo sólo avisa los cambios
+  de estado (`al_cambiar_estado`).
+
 ## Privacidad
 
 - Lo que va a Gemini: el resumen agregado (sin datos de pacientes), los casos
@@ -242,30 +257,12 @@ Verificadas contra lo que guardan el agente y el server, con tests en `tests/`:
   hospital. El repo de GitHub debería ser privado; el PDF de prueba de P03
   quedó en el historial de commits anteriores.
 
-## Integración con TecnoMonitor (pendiente, a decidir)
+## Integración con TecnoMonitor
 
-Hoy es un módulo aparte que lee la base del server. Integrarlo al server
-permitiría usar su sesión de base, su login y roles, su `asana_conector` y
-guardar los informes en Postgres en vez de un SQLite propio. Decisiones antes
-de hacerlo: quién puede pedir y aprobar informes (roles), si el worker corre
-dentro del proceso del server (hoy hay un solo worker de uvicorn) o aparte, y
-dónde se ve el borrador en el dashboard.
-
-### TODOs documentados (decisiones tomadas con supuestos, a confirmar)
-
-1. **`elasticsearch.metric_value`** (`software_auditor.py`): no confirmado
-   si es un conteo acumulado o de ventana rodante. Hoy se reporta tanto el
-   último valor visto como el máximo del período, sin asumir cuál es "el"
-   dato correcto.
-2. **Umbral de expiración SSL**: no existe una clave en `configuracion`
-   para esto. Se usa `ConfiguracionGlobal.ssl_warning_days` (default 30)
-   hasta que se defina un valor oficial.
-3. **Backlog de radiología por estudio** (`backlog_analyzer.py`): se
-   aproxima con el conteo de `borradores` en el último snapshot del
-   período, porque `reportes_uso` trae agregados por ventana de 8/24hs, no
-   el detalle de cada estudio con su propio timestamp. Si SUITESTENSA
-   expone una vista a nivel de estudio individual, migrar este cálculo
-   ahí sería mucho más preciso.
+El módulo corre dentro del server (`server.py` lo monta en su lifespan: worker en un hilo,
+API `/api/informes-ia`, pantalla de revisión en el dashboard). Cómo se relacionan, contratos
+(petición, fuente de datos, aviso de estados), grupos, programaciones, Asana, configuración y
+despliegue: `tecnomonitor-server/docs/25-informes-ia.md`.
 
 ## Próximo paso posible
 

@@ -16,7 +16,7 @@ __all__ = [
     "GeneracionIAFallida",
 ]
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 
 def __getattr__(nombre: str):

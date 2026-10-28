@@ -1,22 +1,30 @@
 # Arquitectura de informes_ia
 
-Reemplaza a los "doc 06" y "doc 07" que se citaban en el código y no estaban en
-el repo. Describe lo que el código hace hoy (versión 2.1.0).
+Describe lo que el código hace hoy (versión 2.2.0). La integración con el server
+de TecnoMonitor (pantalla, API, grupos, programaciones, Asana, despliegue) está en
+`tecnomonitor-server/docs/25-informes-ia.md`.
 
 ## Flujo
 
 ```
-base de TecnoMonitor (Postgres o SQLite)          Asana          manuales PDF
+FUENTE DE DATOS (fuentes.py)                      Asana          manuales PDF
+  FuenteServer en producción / FuenteSQL en lab
         │                                            │                │
         ▼                                            ▼                ▼
 preprocess.generar_resumen()          asana_client.obtener_tareas_asana()   docs_context
   ├─ event_tracker   (reportes_historicos)        humanos (anonimizados) / automáticos
   ├─ backlog_analyzer (reportes_uso)
   ├─ software_auditor (software_monitoring + últimos backups)
-  └─ control_calidad (avisos sobre los datos)
+  ├─ control_calidad (avisos sobre los datos)
+  └─ comparacion (período anterior, fuentes livianas)
+      (grupo.generar_resumen_grupo() para un grupo de hospitales)
+        │
+        ▼
+audiencia.vista_*()               → lo que ve la IA según el público (cliente / interno)
         │
         ▼
 ai_report.generar_json_con_ia()   → sólo TEXTOS, con JSON Schema forzado
+  (generar_json_grupo() para grupos)
         │
         ▼
 ai_report.completar_con_cifras()  → uptime, incidencias, métricas y control de calidad
@@ -31,6 +39,43 @@ Todo lo de arriba lo arma `pipeline_real.PipelineReal`. Lo usan los dos modos:
   Deja un borrador editable y el PDF sólo sale de un informe aprobado.
 - **Sincrónico** (`service.generar_reporte`, CLI `main.py`): genera el PDF en el
   momento, sin borrador. Para probar.
+
+## Fuentes de datos (fuentes.py)
+
+El módulo no consulta tablas: pide los datos a una `FuenteDatos`.
+
+- `FuenteServer` (en el server, `dashboard_app/informes_fuente.py`): lee con la capa `datos/`
+  del server, que funciona igual con el SQLite viejo y con el Postgres de producción (métricas
+  tipadas + inventario; reconstruye los reportes en bloque). Es la de producción.
+- `FuenteSQL` (acá): esquema VIEJO (`reportes_historicos`, `reportes_uso`,
+  `software_monitoring`). Para el laboratorio y los tests. **No sirve contra el Postgres de
+  producción**: ese esquema no tiene esas tablas.
+
+`PipelineReal(settings, fuente=...)`: sin fuente, usa `DATABASE_URL` / `DB_FILENAME` con
+`FuenteSQL`.
+
+## Informes de grupo (grupo.py)
+
+Petición con `alcance: "grupo"` y `grupo: {id, nombre, hospital_ids}` (los resuelve el
+server). Consolidado + tabla, una sola llamada a la IA. Fuentes livianas: horas de reporte
+(disponibilidad), tabla `alertas` (incidentes), último estado por componente y último backup
+(software), KPIs (actividad). Cada fila trae `motivos_atencion` (interno) y
+`recomendaciones_cliente` (cliente).
+
+## Público del informe (audiencia.py)
+
+`cliente` y `interno` reciben vistas distintas de los datos: al cliente no le llegan demoras,
+colas, borradores, huecos de monitoreo, Mirth, tickets internos ni identificadores técnicos, y
+los riesgos del hospital van como recomendaciones. El interno recibe todo y tiene que devolver
+`puntos_a_revisar`. El texto para el cliente pasa por un control de vocabulario: los términos
+prohibidos generan avisos en `control_calidad` (para el revisor, nunca en el PDF del cliente).
+Detalle en el docstring de `audiencia.py` y en docs/25 del server, §7.
+
+## Aviso de cambios de estado
+
+`ServicioReportes(..., al_cambiar_estado=f)`: el módulo llama `f(report_id, estado)` al llegar
+a `finalizado`, `error` o `aprobado`. El server lo usa para avisar en Asana a las
+programaciones. Un fallo del aviso se loguea y no afecta al informe.
 
 ## Estados (historial/estados.py)
 
@@ -74,8 +119,11 @@ las secciones pedidas en `secciones_a_mostrar`.
 | Clave | Quién la escribe |
 |---|---|
 | `meta.tipo`, `meta.fecha`, `meta.hospital` | IA (con los valores que le da el prompt) |
-| `meta.periodo`, `meta.modelo` | código |
+| `meta.periodo`, `meta.modelo`, `meta.alcance`, `meta.grupo` | código |
 | `resumen.texto`, `infraestructura.*`, `incidencias.analisis`, `calidad.*`, `recomendacion` | IA |
+| `puntos_a_revisar` (sólo interno) | IA |
+| `situacion_general`, `hospitales_atencion` (sólo grupo) | IA |
+| `tabla_hospitales`, `comparacion` | código |
 | `resumen.uptime`, `incidencias.externas`, `incidencias.internas` | código |
 | `cifras` (métricas, eventos por tipo, disponibilidad por VM, software) | código |
 | `control_calidad` (avisos sobre datos faltantes o dudosos) | código |
@@ -85,8 +133,7 @@ La plantilla muestra las cifras desde `cifras`, nunca desde texto de la IA.
 
 ## Almacenamiento
 
-- **Base de TecnoMonitor**: sólo lectura (`conexion.py`). `DATABASE_URL` o el
-  archivo SQLite `DB_FILENAME`.
+- **Base de TecnoMonitor**: sólo lectura, a través de la fuente de datos (arriba).
 - **Base propia** (`historial/almacen.py`, SQLite en `HISTORIAL_DB_FILENAME`):
   tabla `reportes` con estado, petición, `data_json`, `grafico_png`, quién lo
   pidió y quién lo aprobó.
