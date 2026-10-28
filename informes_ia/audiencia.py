@@ -108,7 +108,8 @@ DICCIONARIO DE DATOS (cómo leer el resumen):
 """
 
 DICCIONARIO_INTERNO = """
-- eventos.por_tipo: incidentes detectados por el motor sobre la telemetría, agrupados:
+- eventos.por_tipo: EPISODIOS detectados sobre la telemetría (cortes separados por pocos minutos ya
+  vienen unidos en un solo episodio; "cortes_unidos" dice cuántos), agrupados:
   cantidad, minutos totales, abiertos_al_cierre (siguen sin resolverse al terminar el
   período) y los más largos con su entidad (VM, disco, sensor) y detalle.
 - huecos_sin_reportes: intervalos sin datos del agente (> offline_minutes). Pueden ser una
@@ -116,6 +117,9 @@ DICCIONARIO_INTERNO = """
 - disponibilidad_vms_pct: % de reportes con cada VM/equipo en línea.
 - software.canales_mirth: canales de integración HL7 con problema (estado distinto de
   STARTED, cola máxima sobre el umbral o errores en el período).
+- software.certificados_ssl: con_alerta = vencen dentro del umbral de días;
+  no_se_pudo_verificar = el agente no pudo conectarse a revisarlos (red, DNS, puerto, con el
+  motivo). Eso NO significa que estén vencidos: es un problema de verificación a revisar.
 - software.backups_sql: bases sin backup completo dentro del umbral de horas.
 - software.integridad_bases_checkdb: bases con errores de DBCC CHECKDB.
 - software.autoenrute_dicom: reglas de envío DICOM con cola (estudios esperando envío).

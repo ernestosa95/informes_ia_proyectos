@@ -142,6 +142,37 @@ def cobertura(
     return pct, detalle
 
 
+def unir_episodios(eventos: list["Evento"], separacion: timedelta) -> list["Evento"]:
+    """
+    Une los eventos del mismo tipo y entidad separados por menos de `separacion` en un solo
+    episodio. Un valor que oscila alrededor del umbral (ej. la RAM de una APPV entre 89 y 91 %)
+    abría un evento por cada cruce: H05 tuvo 459 "eventos" de RAM en un mes (2026-10-28) que
+    eran unos pocos episodios largos. `detalle.cortes_unidos` dice cuántos se unieron.
+    """
+    por_clave: dict[tuple[str, str], list[Evento]] = defaultdict(list)
+    for e in eventos:
+        por_clave[(e.tipo, e.entidad)].append(e)
+    salida: list[Evento] = []
+    for lista in por_clave.values():
+        lista.sort(key=lambda e: e.inicio)
+        actual = lista[0]
+        cortes = 1
+        for e in lista[1:]:
+            if actual.fin is not None and e.inicio - actual.fin <= separacion:
+                actual = Evento(tipo=actual.tipo, entidad=actual.entidad, severidad=actual.severidad,
+                                inicio=actual.inicio, fin=e.fin or actual.fin, detalle=e.detalle)
+                cortes += 1
+            else:
+                if cortes > 1:
+                    actual.detalle = {**actual.detalle, "cortes_unidos": cortes}
+                salida.append(actual)
+                actual, cortes = e, 1
+        if cortes > 1:
+            actual.detalle = {**actual.detalle, "cortes_unidos": cortes}
+        salida.append(actual)
+    return salida
+
+
 class EventTracker:
     def __init__(self, config: ConfiguracionGlobal):
         self.config = config
@@ -353,6 +384,7 @@ class EventTracker:
         eventos: list[Evento] = []
         for rastreador in self._rastreadores.values():
             eventos.extend(rastreador.finalizar())
+        eventos = unir_episodios(eventos, timedelta(minutes=self.config.offline_minutes))
         # Un Offline de uno o dos reportes es ruido de lectura, no una VM apagada: el motor del
         # server recién alerta a los `offline_minutes`. Mismo criterio acá.
         eventos = [e for e in eventos if e.tipo != "nodo_offline"

@@ -80,12 +80,17 @@ def analizar_software(
         extra = _parse_extra(fila.get("extra_data"))
 
         if app_name == "ssl_certificate":
+            # status ERROR = el agente no pudo conectarse a verificar el certificado (red, DNS,
+            # puerto): NO es un certificado vencido. Sin días; el server los guarda como 0.
             url = fila.get("component_id", "?")
+            no_verificado = str(fila.get("status_value") or "").upper() == "ERROR"
             certificados[url] = {
                 "url": url,
                 "status": fila.get("status_value"),
-                "dias_restantes": fila.get("metric_value"),
+                "dias_restantes": None if no_verificado else fila.get("metric_value"),
                 "expiration_date": extra.get("expiration_date"),
+                "no_se_pudo_verificar": no_verificado,
+                "motivo": (extra.get("last_error") or "error de conexión al verificar") if no_verificado else None,
             }
 
         elif app_name == "elasticsearch":
@@ -167,9 +172,9 @@ def analizar_software(
 
     certificados_alerta = [
         c for c in certificados.values()
-        if (c["status"] and str(c["status"]).upper() == "ERROR")
-        or (isinstance(c["dias_restantes"], (int, float)) and c["dias_restantes"] < config.ssl_warning_days)
+        if isinstance(c["dias_restantes"], (int, float)) and c["dias_restantes"] < config.ssl_warning_days
     ]
+    certificados_no_verificados = [c for c in certificados.values() if c["no_se_pudo_verificar"]]
 
     canales_con_problema = []
     for c in canales_mirth.values():
@@ -220,6 +225,7 @@ def analizar_software(
         "certificados_ssl": {
             "total_monitoreados": len(certificados),
             "con_alerta": certificados_alerta,
+            "no_se_pudo_verificar": certificados_no_verificados,
             "umbral_dias_aviso": config.ssl_warning_days,
         },
         "logs_elasticsearch": {

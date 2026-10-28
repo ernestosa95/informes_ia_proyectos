@@ -87,6 +87,11 @@ def generar_grafico_historico(fuente, hospital_id: str, inicio: str, fin: str, r
         serie_ram.append(float(ram) if ram is not None else float("nan"))
     if not fechas:
         return None
+    # Sin un solo valor de CPU ni de RAM del host (ej. hospital sin datos del hipervisor, H05
+    # 2026-10-28) el gráfico sería un recuadro vacío: mejor no mostrarlo.
+    if all(v != v for v in serie_cpu + serie_ram):     # todos NaN
+        log.info("Sin CPU/RAM del host para %s: se omite el gráfico", hospital_id)
+        return None
 
     plt.style.use("bmh")
     fig, ax = plt.subplots(figsize=(10, 4))

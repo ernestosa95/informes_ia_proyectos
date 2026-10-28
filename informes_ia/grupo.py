@@ -104,11 +104,13 @@ def _fila_hospital(
     fila["mirth_detenidos"] = sum(1 for c in canales if (c.get("status_value") or "").upper() != "STARTED")
     fila["mirth_cola_maxima"] = max((int(c.get("maximo") or 0) for c in canales), default=0)
     certificados = db.obtener_estado_componentes(fuente, hospital_id, "ssl_certificate", inicio, fin)
+    # ERROR = no se pudo verificar (conexión), no vencido: se cuenta aparte.
     fila["ssl_por_vencer"] = sum(
         1 for c in certificados
-        if (c.get("status_value") or "").upper() == "ERROR"
-        or (c.get("metric_value") is not None and int(c["metric_value"]) < config.ssl_warning_days)
+        if (c.get("status_value") or "").upper() != "ERROR"
+        and c.get("metric_value") is not None and int(c["metric_value"]) < config.ssl_warning_days
     )
+    fila["ssl_sin_verificar"] = sum(1 for c in certificados if (c.get("status_value") or "").upper() == "ERROR")
     fin_dt = a_datetime(fin) or datetime.now()
     backups = db.obtener_ultimos_backups(fuente, hospital_id, fin)
     fila["bases_sin_backup"] = sum(

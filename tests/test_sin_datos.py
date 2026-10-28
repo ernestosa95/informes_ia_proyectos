@@ -93,3 +93,37 @@ def test_sin_idrac_el_texto_lo_pone_el_codigo():
 
     vista = audiencia.vista_individual({"infraestructura": r}, {"humanos": []}, "cliente", {"id": "X", "nombre": "X"})
     assert {"energía", "temperatura"} <= set(vista["datos_no_disponibles"])
+
+
+# --- Hallazgos del primer informe real (H05, 2026-10-28) ----------------------------------
+
+def test_ram_que_oscila_alrededor_del_umbral_es_un_episodio():
+    # 89 % / 91 % alternados durante una hora: antes eran 6 eventos, ahora 1 episodio.
+    oscila = lambda m: _vm(telemetry={"cpu": {"usage_percent": 20.0},
+                                       "ram": {"total_gb": 48, "used_gb": 44, "usage_percent": 91.0 if (m // 5) % 2 == 0 else 89.0}})
+    r = _analizar(oscila)
+    ram = [e for e in r["eventos"] if e["tipo"] == "ram_vm_alto"]
+    assert len(ram) == 1 and ram[0]["detalle"]["cortes_unidos"] == 7 and ram[0]["duracion_min"] == 60.0
+
+
+def test_ssl_en_error_no_es_certificado_vencido():
+    from informes_ia.software_auditor import analizar_software
+    filas = [
+        {"app_name": "ssl_certificate", "component_id": "https://visor", "status_value": "ERROR",
+         "metric_value": 0, "extra_data": {"last_error": "timed out"}, "timestamp": T0},
+        {"app_name": "ssl_certificate", "component_id": "https://portal", "status_value": "WARNING",
+         "metric_value": 12, "extra_data": {}, "timestamp": T0},
+    ]
+    ssl = analizar_software(filas, CONFIG)["certificados_ssl"]
+    assert [c["url"] for c in ssl["con_alerta"]] == ["https://portal"]
+    assert ssl["no_se_pudo_verificar"][0]["motivo"] == "timed out"
+    assert ssl["no_se_pudo_verificar"][0]["dias_restantes"] is None
+
+
+def test_sin_cpu_ni_ram_del_host_no_hay_grafico(tmp_path):
+    from informes_ia import db
+
+    class Fuente:
+        def obtener_serie_grafico(self, *a):
+            return [(T0 + timedelta(minutes=5 * i), None, None) for i in range(10)]
+    assert db.generar_grafico_historico(Fuente(), "H05", "x", "y", tmp_path / "g.png") is None
