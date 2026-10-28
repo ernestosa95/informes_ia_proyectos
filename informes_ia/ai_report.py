@@ -94,6 +94,8 @@ REGLAS SOBRE LOS DATOS (obligatorias, por encima del tono):
   sobre ella: en un informe interno decí que faltan datos; en uno para el cliente, omitila.
 - Si un valor parece contradictorio, no lo expliques ni lo destaques.
 - Tendencias: sólo con el bloque "comparacion"; sin él, no hables de mejora o empeoramiento.
+- No escribas nombres de campos de los datos (ej. "estudios_totales") ni "null"/"None": decí
+  en palabras qué falta ("sin datos de actividad clínica").
 """
 
 # Estructura que la IA debe devolver (JSON Schema, forzado por la API).
@@ -316,8 +318,20 @@ def completar_con_cifras(
         "certificados_ssl_con_alerta": len((software.get("certificados_ssl") or {}).get("con_alerta") or []),
     }
     data["comparacion"] = resumen.get("comparacion")
+    _separar_puntos(data)
     data["control_calidad"] = (resumen.get("control_calidad") or []) + audiencia.revisar_vocabulario(data, tipo)
     return data
+
+
+_MARCA_PRIORIDAD = re.compile(r"\s*(?=\[(?:ALTA|MEDIA|BAJA)\])")
+
+
+def _separar_puntos(data: dict[str, Any]) -> None:
+    """Un punto por línea aunque la IA los mande pegados en un párrafo (grupo HUPC, 28/10)."""
+    texto = data.get("puntos_a_revisar")
+    if isinstance(texto, str) and texto.strip():
+        data["puntos_a_revisar"] = "\n".join(
+            p.strip() for linea in texto.splitlines() for p in _MARCA_PRIORIDAD.split(linea) if p.strip())
 
 
 def _contar_por_tipo(eventos: list[dict[str, Any]]) -> dict[str, int]:
@@ -429,6 +443,7 @@ def completar_con_cifras_grupo(data: dict[str, Any], resumen: dict[str, Any]) ->
         for f in resumen.get("hospitales") or []
     ]
     data["comparacion"] = resumen.get("comparacion")
+    _separar_puntos(data)
     tipo = meta.get("tipo", audiencia.INTERNO)
     data["control_calidad"] = (resumen.get("control_calidad") or []) + audiencia.revisar_vocabulario(data, tipo)
     return data

@@ -21,7 +21,7 @@ Los grupos los define el server (tablas grupos_hospitales); acá llegan ya resue
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +60,8 @@ _CATEGORIAS: list[tuple[str, str, bool]] = [
 
 # Por debajo de esta disponibilidad el hospital "necesita atención".
 UPTIME_ATENCION = 99.0
+# Un hospital sin reportes en el período es una caída sólo si reportaba en estos días previos.
+DIAS_PREVIOS_SIN_REPORTE = 90
 
 
 def _categoria(tipo: str) -> tuple[str, bool]:
@@ -131,6 +133,13 @@ def _fila_hospital(
     else:
         fila["estudios_totales"] = None
 
+    if not horas:
+        # Sin reportes de infraestructura: sólo es una caída si antes reportaba. Si tampoco hay en
+        # los días previos, se incorporó después o no tiene agente propio (un caché de PACS que
+        # sólo manda autoenrute): HUPC-C1 salía como "prioridad máxima" (28/10).
+        previo = (a_datetime(inicio) or datetime.now()) - timedelta(days=DIAS_PREVIOS_SIN_REPORTE)
+        fila["reportaba_antes"] = bool(db.obtener_horas_reporte(
+            fuente, hospital_id, previo.strftime("%Y-%m-%d %H:%M:%S"), inicio))
     fila["motivos_atencion"] = _motivos(fila)
     fila["recomendaciones_cliente"] = _recomendaciones_cliente(fila)
     return fila
@@ -140,7 +149,7 @@ def _motivos(f: dict[str, Any]) -> list[str]:
     """Por qué un hospital necesita atención (vacío = sin novedades). Orden = prioridad."""
     m: list[str] = []
     if not f["reportes"]:
-        return ["sin reportes en el período"]
+        return ["sin reportes en el período"] if f.get("reportaba_antes", True) else []
     if f["uptime_pct"] is not None and f["uptime_pct"] < UPTIME_ATENCION:
         m.append(f"disponibilidad {f['uptime_pct']}%")
     if f["incidentes_criticos"]:
@@ -219,9 +228,14 @@ def generar_resumen_grupo(
     }
 
     avisos = []
-    sin_datos = [f["hospital_id"] for f in filas if not f.get("reportes")]
+    sin_datos = [f["hospital_id"] for f in filas if not f.get("reportes") and f.get("reportaba_antes", True)]
     if sin_datos:
-        avisos.append(f"Sin reportes en el período: {', '.join(sin_datos)}. Verificar si es una caída real o un hospital sin agente.")
+        avisos.append(f"Sin reportes en el período: {', '.join(sin_datos)}. Antes reportaban: verificar si es una caída real.")
+    sin_monitoreo = [f["hospital_id"] for f in filas if not f.get("reportes") and not f.get("reportaba_antes", True)]
+    if sin_monitoreo:
+        avisos.append(f"Sin datos de infraestructura en el período ni en los {DIAS_PREVIOS_SIN_REPORTE} días previos: "
+                      f"{', '.join(sin_monitoreo)} (incorporado después o sin agente propio, p. ej. un caché). "
+                      "No cuenta para la disponibilidad ni como hospital que requiere atención.")
     if len(estudios) < len(con_datos):
         avisos.append(f"Sin KPIs de RIS/PACS en {len(con_datos) - len(estudios)} hospital(es): el total de estudios es parcial.")
 

@@ -37,6 +37,8 @@
         .control { background: #fdecea; border-left: 4px solid #c0392b; padding: 10px 14px; font-size: 11px; }
         table.det { width: 100%; border-collapse: collapse; font-size: 10px; }
         table.det td, table.det th { border-bottom: 1px solid #eee; padding: 3px 6px; text-align: left; }
+        table.det tr { page-break-inside: avoid; }
+        h2, h3 { page-break-after: avoid; }
         img { max-width: 100%; border: 1px solid #eee; border-radius: 6px; }
     </style>
 </head>
@@ -91,12 +93,12 @@
 
     <h2>3. Detalle por hospital</h2>
     <table class="det">
-        {% if interno %}
+        <thead>{% if interno %}
         <tr><th>Hospital</th><th>Disponibilidad</th><th>Incidentes (críticos)</th><th>Bases sin backup</th>
             <th>Mirth detenidos</th><th>Estudios</th><th>Atención</th></tr>
         {% else %}
-        <tr><th>Hospital</th><th>Disponibilidad</th><th>Incidentes gestionados</th><th>Estudios</th><th>Recomendaciones</th></tr>
-        {% endif %}
+        <tr><th>Hospital</th><th>Disponibilidad</th><th>Alertas detectadas</th><th>Estudios</th><th>Recomendaciones</th></tr>
+        {% endif %}</thead>
         {% for h in data.tabla_hospitales or [] %}
         <tr>
             <td><strong>{{ h.hospital_id }}</strong> {{ h.nombre }}</td>

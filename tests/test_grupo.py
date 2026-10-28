@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from types import SimpleNamespace
 
 from informes_ia import grupo, render
@@ -50,12 +51,48 @@ def test_agregados_y_hospitales_que_requieren_atencion(fuente):
     assert any("Sin KPIs" in a for a in r["control_calidad"])
 
 
-def test_hospital_sin_reportes_queda_marcado(fuente):
+def test_hospital_que_nunca_reporto_no_es_una_caida(fuente):
+    # Caché sin agente propio o incorporado después (HUPC-C1, 28/10): no requiere atención.
     r = grupo.generar_resumen_grupo(fuente, {"id": 2, "nombre": "X", "hospital_ids": ["P98", "NO_EXISTE"]},
                                     DESDE, HASTA, config=get_configuracion(fuente))
     filas = {f["hospital_id"]: f for f in r["hospitales"]}
-    assert filas["NO_EXISTE"]["motivos_atencion"] == ["sin reportes en el período"]
-    assert any("NO_EXISTE" in a for a in r["control_calidad"])
+    assert filas["NO_EXISTE"]["motivos_atencion"] == []
+    assert "NO_EXISTE" not in [h["hospital_id"] for h in r["hospitales_que_requieren_atencion"]]
+    assert any("NO_EXISTE" in a and "sin agente propio" in a for a in r["control_calidad"])
+
+
+def test_hospital_que_dejo_de_reportar_requiere_atencion(fuente):
+    # P99 reporta de 00:00 a 04:00; de 06:00 a 10:00 ya no: eso sí es una caída a revisar.
+    despues = lambda h: (FIN + timedelta(hours=h)).strftime("%Y-%m-%d %H:%M:%S")
+    r = grupo.generar_resumen_grupo(fuente, {"id": 3, "nombre": "Y", "hospital_ids": [HOSPITAL]},
+                                    despues(2), despues(6), config=get_configuracion(fuente))
+    assert r["hospitales"][0]["motivos_atencion"] == ["sin reportes en el período"]
+    assert any(HOSPITAL in a and "caída real" in a for a in r["control_calidad"])
+
+
+def test_puntos_pegados_en_un_parrafo_van_uno_por_linea():
+    from informes_ia import ai_report
+    data = {"puntos_a_revisar": "[ALTA] A/x — y → z. [MEDIA] B/x — y → z. [BAJA] C/x — y → z."}
+    ai_report._separar_puntos(data)
+    assert data["puntos_a_revisar"].splitlines() == ["[ALTA] A/x — y → z.", "[MEDIA] B/x — y → z.", "[BAJA] C/x — y → z."]
+
+
+def test_nombres_de_campos_en_el_texto_quedan_avisados():
+    from informes_ia import audiencia
+    avisos = audiencia.revisar_vocabulario(
+        {"resumen": {"texto": "Actividad clínica no disponible (estudios_totales es null). Canal [MIRTH_H05] SYSTEM_ERROR."},
+         "puntos_a_revisar": "[BAJA] x"}, "interno")
+    assert any("estudios_totales" in a and "null" in a and "MIRTH" not in a for a in avisos)
+
+
+def test_cliente_no_ve_reportes_ni_alertas_en_la_comparacion():
+    from informes_ia import audiencia
+    comp = {"periodo_anterior": {}, "anterior": {"uptime_pct": 99.6, "alertas": 2, "estudios_totales": 1822, "reportes": 7732},
+            "actual": {"uptime_pct": 100.0, "alertas": 19, "estudios_totales": 1015, "reportes": 7703}}
+    vista = audiencia.vista_individual({"comparacion": comp}, {"humanos": []}, "cliente", {"id": "H05"})
+    assert vista["comparacion"]["actual"] == {"uptime_pct": 100.0, "estudios_totales": 1015}
+    interno = audiencia.vista_individual({"comparacion": comp}, {"humanos": []}, "interno", {"id": "H05"})
+    assert interno["comparacion"]["actual"]["alertas"] == 19
 
 
 class _ClienteFalso:

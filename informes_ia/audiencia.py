@@ -177,6 +177,10 @@ VOCABULARIO INTERNO:
 - Separá hechos (lo que dicen los datos) de hipótesis (marcalas como "posible causa").
 - Señalá explícitamente lo que hay que revisar o mejorar, aunque sea responsabilidad nuestra
   (monitoreo, agente, configuración, demoras de atención).
+- RAM alta sostenida en una VM APPV: el SQL Server reserva casi toda la memoria a propósito.
+  No la llames "fuga de memoria" ni "degradación": es una posible causa a confirmar, no un hecho.
+- El hardware (iDRAC) se lee por su API (Redfish), no por SNMP: si faltan esos datos, la acción
+  es "revisar la conexión del agente con el iDRAC", no "configurar SNMP".
 """,
 }
 
@@ -188,6 +192,10 @@ _PROHIBIDOS_CLIENTE = [
     r"\bAR[A-Z]{0,2}\d{1,3}[A-Z]{2,5}V\b", r"\bsin monitoreo\b", r"\bfalla\w* (?:del|de nuestro) (?:servicio|monitoreo)",
 ]
 _REGEX_CLIENTE = re.compile("|".join(_PROHIBIDOS_CLIENTE), re.IGNORECASE)
+
+# Nombres de campos del JSON o valores nulos que se cuelan en el texto ("estudios_totales es null").
+# Sólo minúsculas con guion bajo: los canales de Mirth y las VMs van en mayúsculas.
+_REGEX_CAMPOS = re.compile(r"\b(?:null|None)\b|\b[a-z]+(?:_[a-z]+)+\b")
 
 # Campos de texto de la IA que se revisan.
 _CAMPOS_TEXTO = [
@@ -218,6 +226,11 @@ def revisar_vocabulario(data: dict[str, Any], audiencia: str) -> list[str]:
                               "Revisar antes de aprobar.")
     elif not _texto(data, ("puntos_a_revisar",)).strip():
         avisos.append("El informe interno no trae puntos a revisar: completarlos o confirmar que no hay.")
+    for ruta in _CAMPOS_TEXTO:
+        campos = sorted({m.group(0) for m in _REGEX_CAMPOS.finditer(_texto(data, ruta))})
+        if campos:
+            avisos.append(f"El texto ({'.'.join(ruta)}) muestra nombres internos de datos: {', '.join(campos)}. "
+                          "Reescribirlo en palabras.")
     return avisos
 
 
@@ -229,6 +242,16 @@ def _periodo(resumen: dict[str, Any]) -> dict[str, Any]:
     if d0 and d1:
         p["dias"] = round((min(d1, datetime.now()) - d0).total_seconds() / 86400, 1)
     return p
+
+
+def _comparacion_cliente(comp: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Al cliente sólo disponibilidad y estudios: la cantidad de reportes del agente se leía como
+    "informes" médicos y la suba de alertas es una debilidad (H05, 28/10)."""
+    if not comp:
+        return comp
+    claves = ("uptime_pct", "uptime_promedio_pct", "estudios_totales")
+    return {**comp, **{lado: {k: v for k, v in (comp.get(lado) or {}).items() if k in claves}
+                       for lado in ("anterior", "actual")}}
 
 
 def _actividad_cliente(clinico: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -283,7 +306,8 @@ def vista_individual(resumen: dict[str, Any], asana: dict[str, list[str]], audie
         "hospital": hospital,
         "periodo": _periodo(resumen),
         "disponibilidad_pct": infra.get("uptime_pct"),
-        "comparacion": resumen.get("comparacion"),
+        "comparacion": (_comparacion_cliente(resumen.get("comparacion")) if audiencia == CLIENTE
+                        else resumen.get("comparacion")),
     }
     if audiencia == CLIENTE:
         return {
@@ -313,7 +337,9 @@ def vista_individual(resumen: dict[str, Any], asana: dict[str, list[str]], audie
 
 
 def vista_grupo(resumen: dict[str, Any], audiencia: str) -> dict[str, Any]:
-    base = {"grupo": resumen.get("grupo"), "periodo": _periodo(resumen), "comparacion": resumen.get("comparacion")}
+    base = {"grupo": resumen.get("grupo"), "periodo": _periodo(resumen),
+            "comparacion": (_comparacion_cliente(resumen.get("comparacion")) if audiencia == CLIENTE
+                            else resumen.get("comparacion"))}
     ag = resumen.get("agregados") or {}
     if audiencia == CLIENTE:
         return {
