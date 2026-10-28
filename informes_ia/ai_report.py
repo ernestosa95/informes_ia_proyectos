@@ -47,16 +47,16 @@ PERFILES: dict[str, PerfilReporte] = {
         rol="RESPONSABLE DE CUENTA (CUSTOMER SUCCESS)",
         tono=(
             "Claro, cordial y profesional, para la dirección de un hospital. Sin jerga técnica. "
-            "Pone en valor el servicio con datos concretos (disponibilidad, actividad, incidentes "
-            "gestionados) y presenta los riesgos del hospital como recomendaciones."
+            "Pone en valor el servicio con datos concretos (disponibilidad, actividad, detección "
+            "preventiva, pedidos atendidos) y presenta los riesgos del hospital como recomendaciones."
         ),
         instrucciones="""
         - resumen.texto: disponibilidad del período y los dos o tres hechos más relevantes, con cifras.
         - infraestructura.energia / termica / mensaje: estado del equipamiento físico y del entorno,
           en lenguaje de gestión. Si esa área figura en datos_no_disponibles, devolvé el campo
           vacío ("") y no la menciones en ningún otro texto.
-        - incidencias.analisis: cuántos incidentes detectó y gestionó el servicio y en qué áreas;
-          si hubo casos de gestión del hospital, cuáles se atendieron.
+        - incidencias.analisis: cuántos eventos detectó el monitoreo preventivo y en qué áreas (sin
+          decir que cada uno fue gestionado); si hubo casos de gestión del hospital, cuáles se atendieron.
         - calidad.estabilidad: tendencia frente al período anterior si la hay; si no, estabilidad del período.
         - calidad.caso_destacado: un hecho concreto que muestre el valor del servicio.
         - recomendacion: las recomendaciones_sugeridas, priorizadas y explicadas para la dirección.
@@ -288,10 +288,9 @@ def completar_con_cifras(
     data.setdefault("resumen", {})["uptime"] = _fmt_pct(infra.get("uptime_pct"))
     incid = data.setdefault("incidencias", {})
     incid["externas"] = len(asana_casos.get("humanos", []))
-    incid["internas"] = len(eventos)
-
     metricas = infra.get("metricas") or {}
     tipo = (data.get("meta") or {}).get("tipo", audiencia.INTERNO)
+    incid["internas"] = len(audiencia.eventos_cliente(eventos) if tipo == audiencia.CLIENTE else eventos)
 
     # Áreas sin un solo dato en el período (ej. sin iDRAC): el texto lo pone el código, no la IA.
     # El esquema obliga a la IA a escribir estos campos y, sin datos, tendería a un "sin novedades".
@@ -354,7 +353,7 @@ def _construir_prompt_grupo(resumen: dict[str, Any], tipo_reporte: str) -> str:
     if tipo_reporte == audiencia.CLIENTE:
         campos = """
     - resumen.texto: estado del conjunto en el período, en dos o tres oraciones con cifras.
-    - situacion_general: disponibilidad, incidentes gestionados y actividad clínica del grupo, con la
+    - situacion_general: disponibilidad, alertas detectadas por el monitoreo y actividad clínica del grupo, con la
       tendencia frente al período anterior si la hay. Destacá los hospitales con mejor desempeño.
     - hospitales_atencion: RECOMENDACIONES POR HOSPITAL, sólo para los que tienen
       recomendaciones_sugeridas, en tono constructivo. Si ninguno tiene, decí que no hay

@@ -60,7 +60,7 @@
     <table class="cifras"><tr>
         <td><span class="val">{{ c.hospitales }}</span><span class="lbl">Hospitales</span></td>
         <td><span class="val">{{ c.hospitales_que_requieren_atencion if data.meta.tipo == 'interno' else ((data.tabla_hospitales or [])|selectattr('recomendaciones_cliente')|list|length) }}</span><span class="lbl">{{ 'Requieren atención' if data.meta.tipo == 'interno' else 'Con recomendaciones' }}</span></td>
-        <td><span class="val">{{ c.incidentes_criticos_totales if data.meta.tipo == 'interno' else c.incidentes_totales }}</span><span class="lbl">{{ 'Incidentes críticos' if data.meta.tipo == 'interno' else 'Incidentes gestionados' }}</span></td>
+        <td><span class="val">{{ c.incidentes_criticos_totales if data.meta.tipo == 'interno' else c.incidentes_totales }}</span><span class="lbl">{{ 'Incidentes críticos' if data.meta.tipo == 'interno' else 'Alertas detectadas' }}</span></td>
         <td><span class="val">{{ '{:,}'.format(c.estudios_totales).replace(',', '.') if c.estudios_totales is not none else 's/d' }}</span><span class="lbl">Estudios (RIS)</span></td>
     </tr></table>
     <p style="margin-top: 10px;">{{ data.situacion_general }}</p>

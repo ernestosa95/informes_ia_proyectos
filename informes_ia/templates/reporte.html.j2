@@ -58,11 +58,16 @@
     </div>
 
     <h2>1. Visión Operativa</h2>
+    {# Al cliente sólo se le muestran las cifras que existen; el interno ve "s/d" para saber qué falta. #}
+    {% set interno = data.meta.tipo == 'interno' %}
     <table class="cifras"><tr>
         <td><span class="val">{{ data.resumen.uptime }}</span><span class="lbl">Disponibilidad</span></td>
-        <td><span class="val">{{ '%.1f'|format(c.cpu_host_promedio_pct) ~ '%' if c.cpu_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">CPU promedio (host)</span></td>
-        <td><span class="val">{{ '%.1f'|format(c.ram_host_promedio_pct) ~ '%' if c.ram_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">RAM promedio (host)</span></td>
-        <td><span class="val">{{ c.temp_cpu_maxima_c ~ ' °C' if c.temp_cpu_maxima_c is not none else 's/d' }}</span><span class="lbl">Temp. CPU máxima</span></td>
+        {% if interno or c.cpu_host_promedio_pct is not none %}
+        <td><span class="val">{{ '%.1f'|format(c.cpu_host_promedio_pct) ~ '%' if c.cpu_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">CPU promedio (host)</span></td>{% endif %}
+        {% if interno or c.ram_host_promedio_pct is not none %}
+        <td><span class="val">{{ '%.1f'|format(c.ram_host_promedio_pct) ~ '%' if c.ram_host_promedio_pct is not none else 's/d' }}</span><span class="lbl">RAM promedio (host)</span></td>{% endif %}
+        {% if interno or c.temp_cpu_maxima_c is not none %}
+        <td><span class="val">{{ c.temp_cpu_maxima_c ~ ' °C' if c.temp_cpu_maxima_c is not none else 's/d' }}</span><span class="lbl">Temp. CPU máxima</span></td>{% endif %}
     </tr></table>
     {% if grafico %}<div style="text-align: center; margin-top: 10px;"><img src="{{ grafico }}"></div>{% endif %}
 
@@ -85,21 +90,23 @@
     </table>
     {% endif %}
 
-    <h2>2. Estado de la Infraestructura</h2>
+    {% if data.infraestructura.energia or data.infraestructura.termica or data.infraestructura.mensaje %}
+    {% set n_seccion = 2 %}<h2>2. Estado de la Infraestructura</h2>
     {% if data.infraestructura.energia %}<h3>Energía</h3><p style="margin: 0;">{{ data.infraestructura.energia }}</p>{% endif %}
     {% if data.infraestructura.termica %}<h3>Térmica</h3><p style="margin: 0;">{{ data.infraestructura.termica }}</p>{% endif %}
     {% if data.infraestructura.mensaje %}<p class="nota">{{ data.infraestructura.mensaje }}</p>{% endif %}
+    {% endif %}
 
-    <h2>3. Gestión de Incidencias</h2>
+    <h2>{{ (n_seccion | default(1)) + 1 }}. Gestión de Incidencias</h2>
     <table class="inc"><tr>
         <td class="inc-ext"><span class="num">{{ data.incidencias.externas }}</span>
             <span style="font-size:10px; text-transform:uppercase">Casos de gestión (Asana)</span></td>
         <td class="inc-int"><span class="num">{{ data.incidencias.internas }}</span>
-            <span style="font-size:10px; text-transform:uppercase">Eventos detectados {{ 'y gestionados' if data.meta.tipo == 'cliente' else 'por el monitoreo' }}</span></td>
+            <span style="font-size:10px; text-transform:uppercase">{{ 'Eventos detectados por el monitoreo preventivo' if data.meta.tipo == 'cliente' else 'Eventos detectados por el monitoreo' }}</span></td>
     </tr></table>
     <div class="nota"><strong>Análisis:</strong> {{ data.incidencias.analisis }}</div>
 
-    <h2>4. Calidad &amp; Recomendaciones</h2>
+    <h2>{{ (n_seccion | default(1)) + 2 }}. Calidad &amp; Recomendaciones</h2>
     <ul>
         <li><strong>Estabilidad:</strong> {{ data.calidad.estabilidad }}</li>
         <li><strong>Caso destacado:</strong> {{ data.calidad.caso_destacado }}</li>

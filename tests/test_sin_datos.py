@@ -84,7 +84,7 @@ def test_sin_idrac_el_texto_lo_pone_el_codigo():
     cliente = ai_report.completar_con_cifras(json.loads(json.dumps(ia)), resumen, {"humanos": []})
     assert cliente["infraestructura"]["energia"] == "" and cliente["infraestructura"]["termica"] == ""
     html = render.renderizar_html(cliente)
-    assert "Energía" not in html.split("Estado de la Infraestructura")[1].split("Gestión de Incidencias")[0]
+    assert "Energía" not in html and "Estado de la Infraestructura" not in html     # sección vacía: no va
 
     interno = ai_report.completar_con_cifras({**json.loads(json.dumps(ia)), "meta": {"tipo": "interno"}},
                                              resumen, {"humanos": []})
@@ -127,3 +127,32 @@ def test_sin_cpu_ni_ram_del_host_no_hay_grafico(tmp_path):
         def obtener_serie_grafico(self, *a):
             return [(T0 + timedelta(minutes=5 * i), None, None) for i in range(10)]
     assert db.generar_grafico_historico(Fuente(), "H05", "x", "y", tmp_path / "g.png") is None
+
+
+# --- Informe de cliente de H05 (2026-10-28) ------------------------------------------------
+
+def test_cliente_no_cuenta_picos_de_uso_ni_dice_gestionados():
+    eventos = [{"tipo": "ram_vm_alto", "entidad": "APPV"}] * 480 + [{"tipo": "nodo_offline", "entidad": "PRTV"}] * 15 \
+        + [{"tipo": "disco_lleno", "entidad": "APPV D:"}]
+    resumen = {"infraestructura": {"eventos": eventos, "uptime_pct": 100.0, "reportes_con_dato": {}}}
+    vista = audiencia.vista_individual(resumen, {"humanos": []}, "cliente", {"id": "H05", "nombre": "H05"})
+    assert vista["incidentes"] == {"total_detectados": 16,
+                                   "por_area": {"servidores y equipos": 15, "capacidad": 1}}
+    ia = {"meta": {"tipo": "cliente"}, "resumen": {"texto": "x"}, "infraestructura": {"mensaje": ""}}
+    cliente = ai_report.completar_con_cifras(ia, resumen, {"humanos": []})
+    assert cliente["incidencias"]["internas"] == 16
+    interno = ai_report.completar_con_cifras({**ia, "meta": {"tipo": "interno"}}, resumen, {"humanos": []})
+    assert interno["incidencias"]["internas"] == 496
+
+
+def test_cliente_sin_host_ni_idrac_no_muestra_sd_ni_seccion_vacia():
+    r = _analizar(lambda m: _vm(), idrac=False)
+    r["metricas"] = {}
+    resumen = {"infraestructura": r}
+    ia = {"meta": {"tipo": "cliente"}, "resumen": {"texto": "x"}, "infraestructura": {"energia": "", "termica": "", "mensaje": ""},
+          "incidencias": {"analisis": "a"}, "calidad": {}, "recomendacion": "r"}
+    html = render.renderizar_html(ai_report.completar_con_cifras(ia, resumen, {"humanos": []}))
+    assert "s/d" not in html.split("Comparación")[0] and "Estado de la Infraestructura" not in html
+    assert "2. Gestión de Incidencias" in html and "3. Calidad" in html
+    interno = render.renderizar_html(ai_report.completar_con_cifras({**ia, "meta": {"tipo": "interno"}}, resumen, {"humanos": []}))
+    assert "s/d" in interno and "2. Estado de la Infraestructura" in interno and "3. Gestión de Incidencias" in interno

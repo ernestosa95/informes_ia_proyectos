@@ -85,13 +85,24 @@ def resumir_eventos(eventos: list[dict[str, Any]], fin: Any, detalle_max: int = 
 
 
 
+# Lo que el cliente NO ve como "incidente": los picos de uso (CPU/RAM). En las APPV el SQL Server
+# usa casi toda la RAM a propósito, así que contarlos daba cientos de "incidentes" que nadie atendió
+# (H05, 28/10: 480 de 496). Siguen en el informe interno.
+GRUPOS_NO_CLIENTE = {"rendimiento"}
+
+
+def eventos_cliente(eventos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in eventos
+            if CATEGORIAS_EVENTO.get(e.get("tipo", ""), ("", ""))[1] not in GRUPOS_NO_CLIENTE]
+
+
 def _eventos_para_cliente(eventos: list[dict[str, Any]]) -> dict[str, Any]:
     """Sólo cantidades por grupo, sin entidades técnicas ni duraciones."""
     grupos: dict[str, int] = {}
-    for e in eventos:
+    for e in eventos_cliente(eventos):
         grupo = CATEGORIAS_EVENTO.get(e.get("tipo", ""), ("", "otros eventos técnicos"))[1] or "otros eventos técnicos"
         grupos[grupo] = grupos.get(grupo, 0) + 1
-    return {"total_detectados_y_gestionados": len(eventos), "por_area": grupos}
+    return {"total_detectados": sum(grupos.values()), "por_area": grupos}
 
 
 # ── diccionario de datos (para que la IA entienda cada campo) ────────────────
@@ -130,9 +141,10 @@ DICCIONARIO_INTERNO = """
 """
 
 DICCIONARIO_CLIENTE = """
-- incidentes.total_detectados_y_gestionados: eventos que el monitoreo detectó en el período,
-  por área (infraestructura física, servidores y equipos, capacidad, rendimiento). Todos
-  fueron gestionados por el servicio.
+- incidentes.total_detectados: eventos que el monitoreo preventivo detectó en el período, por
+  área (infraestructura física, servidores y equipos, capacidad). Es una detección automática:
+  NO todos requirieron una intervención, así que no digas que fueron "gestionados",
+  "resueltos" ni "atendidos" uno por uno.
 - recomendaciones_sugeridas: puntos que conviene que el hospital atienda; redactalos como
   recomendaciones constructivas.
 - casos_de_gestion: títulos de los pedidos del hospital atendidos en el período.
@@ -150,7 +162,10 @@ VOCABULARIO PARA EL CLIENTE (obligatorio):
   espera, huecos o cortes del monitoreo, el agente, tickets internos, errores de software
   propio, ni nombres técnicos (VMs como ARP19APPV, MSSQLSERVER, Mirth, iDRAC, Logstash,
   Elastic, CHECKDB, RAID, DICOM, HL7).
-- Los incidentes se cuentan como "detectados y gestionados por el servicio".
+- Los incidentes se cuentan como "detectados por el monitoreo preventivo". Lo que el servicio
+  atendió son los casos_de_gestion (pedidos del hospital): de esos sí podés decir que se atendieron.
+- No exageres ni agregues efectos que no están en los datos ("garantizando la continuidad",
+  "sin comprometer..."): describí lo que pasó.
 - Los riesgos del hospital (backups, certificados, equipamiento) van SOLO como
   recomendaciones, con tono constructivo, nunca como fallas.
 - No prometas niveles de servicio ni culpes a terceros.
@@ -240,7 +255,7 @@ def _recomendaciones_cliente_individual(resumen: dict[str, Any]) -> list[str]:
         rec.append("renovar los certificados de seguridad próximos a vencer")
     tipos = {e.get("tipo") for e in infra.get("eventos") or []}
     if "disco_lleno" in tipos:
-        rec.append("planificar la ampliación de almacenamiento de los servidores")
+        rec.append("revisar junto al servicio el uso del almacenamiento de los servidores")
     if tipos & {"fuente_poder_fallo", "ventilador_fallo", "raid_degradado"}:
         rec.append("evaluar el estado del equipamiento con eventos de hardware detectados")
     if tipos & {"temp_cpu_alta", "temp_ambiente_alta"}:
@@ -308,7 +323,7 @@ def vista_grupo(resumen: dict[str, Any], audiencia: str) -> dict[str, Any]:
             "hospitales": [
                 {"hospital_id": f.get("hospital_id"), "nombre": f.get("nombre"),
                  "disponibilidad_pct": f.get("uptime_pct"),
-                 "incidentes_detectados_y_gestionados": f.get("incidentes"),
+                 "alertas_detectadas": f.get("incidentes"),
                  "estudios_totales": f.get("estudios_totales"),
                  "recomendaciones_sugeridas": f.get("recomendaciones_cliente") or []}
                 for f in resumen.get("hospitales") or []

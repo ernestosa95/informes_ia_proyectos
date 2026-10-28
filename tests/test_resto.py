@@ -121,7 +121,7 @@ def test_las_cifras_las_pone_el_codigo_y_no_la_ia():
     data = _pipeline(_ClienteFalso(json.dumps(_JSON_IA))).generador_ia(_contexto(humanos=["CASO: x"]))
     assert data["resumen"]["uptime"] == "99,50%"
     assert data["incidencias"]["externas"] == 1
-    assert data["incidencias"]["internas"] == 1
+    assert data["incidencias"]["internas"] == 0          # informe de cliente: los picos de RAM no cuentan
     assert data["cifras"]["eventos_por_tipo"] == {"ram_vm_alto": 1}
     assert data["meta"]["modelo"] == "gemini-prueba-001"
 
