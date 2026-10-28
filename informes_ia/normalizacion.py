@@ -98,6 +98,22 @@ def _get(d: Any, *path, default=None):
     return cur if cur is not None else default
 
 
+def _ram_vm(telemetry: dict[str, Any]) -> float | None:
+    """
+    % de RAM de una VM, o None si no hay dato real. El agente convierte en 0 lo que WMI no
+    devuelve: sin `FreePhysicalMemory`, la cuenta da usado == total (100 % falso); sin
+    `TotalVisibleMemorySize`, 0 %. Windows siempre deja memoria libre, así que usado == total
+    o total == 0 no son lecturas reales.
+    """
+    ram = _get(telemetry, "ram", default={}) or {}
+    pct, usado, total = ram.get("usage_percent"), ram.get("used_gb"), ram.get("total_gb")
+    if pct is None:
+        return None
+    if total is not None and (total <= 0 or (usado is not None and usado >= total)):
+        return None
+    return pct
+
+
 def parse_snapshot(raw: dict[str, Any]) -> SnapshotNormalizado:
     envelope = raw.get("envelope", {}) or {}
     hospital_id = envelope.get("hospital_id", "desconocido")
@@ -166,7 +182,7 @@ def parse_snapshot(raw: dict[str, Any]) -> SnapshotNormalizado:
                 state=nodo.get("state", "?"),
                 state_reason=nodo.get("state_reason"),
                 cpu_percent=_get(telemetry, "cpu", "usage_percent"),
-                ram_percent=_get(telemetry, "ram", "usage_percent"),
+                ram_percent=_ram_vm(telemetry),
                 discos=discos,
                 servicios=servicios,
             )

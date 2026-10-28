@@ -71,6 +71,25 @@ los riesgos del hospital van como recomendaciones. El interno recibe todo y tien
 prohibidos generan avisos en `control_calidad` (para el revisor, nunca en el PDF del cliente).
 Detalle en el docstring de `audiencia.py` y en docs/25 del server, §7.
 
+## Datos faltantes
+
+Regla: un dato que falta **nunca** se convierte en un valor (0, 100 %, "sin novedades"); se
+informa como faltante.
+
+| Caso | Cómo se trata |
+|---|---|
+| Métrica ausente (ej. CPU de una VM sin lectura) | `None`: no se evalúa, no entra en promedios ni eventos |
+| VM "Offline" por error de acceso (`wmi_error`, `ssh_error`) | La VM responde pero no se pudo leer: no es VM apagada, no cuenta para su disponibilidad, se informa en `vms_sin_acceso_reportes` (mismo criterio que el motor de alertas) |
+| VM Offline menos de `offline_minutes` | Ruido de lectura: no es evento (el motor recién alerta a los 15 min) |
+| RAM de VM con usado == total o total 0 | Lectura imposible (el agente convierte en 0 lo que WMI no devuelve): se trata como sin dato |
+| Sin iDRAC (sin energía ni temperatura en todo el período) | `control_calidad` lo avisa; para el cliente está en `datos_no_disponibles` y los campos `energia` / `termica` los deja vacíos el código (la plantilla oculta la sección); en el interno, el código escribe "Sin datos de … iDRAC no configurado o sin respuesta" |
+| Sin KPIs, sin software, sin reportes | `control_calidad` (interno) y `datos_no_disponibles` (cliente); la IA tiene prohibido afirmar algo sobre esas áreas |
+| Falta una sección en el JSON del borrador | La plantilla la muestra vacía (no corta el PDF) |
+
+**Pendiente en el agente (propuesta para 4.5.6):** `safe_int` / `safe_float` devuelven 0 cuando
+WMI no trae un valor. Para CPU (`LoadPercentage`) eso es indistinguible de una VM ociosa; habría
+que mandar `null` en esos casos. Lo de la RAM ya se detecta acá.
+
 ## Aviso de cambios de estado
 
 `ServicioReportes(..., al_cambiar_estado=f)`: el módulo llama `f(report_id, estado)` al llegar

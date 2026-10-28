@@ -100,7 +100,7 @@ def _poblar(conn) -> None:
     while ts <= FIN:
         if not (INICIO + timedelta(hours=1) < ts < INICIO + timedelta(hours=2)):
             falla = INICIO + timedelta(hours=2, minutes=30) <= ts <= INICIO + timedelta(hours=3)
-            offline = INICIO + timedelta(hours=3, minutes=10) <= ts <= INICIO + timedelta(hours=3, minutes=20)
+            offline = INICIO + timedelta(hours=3, minutes=5) <= ts <= INICIO + timedelta(hours=3, minutes=25)
             svc_parado = INICIO + timedelta(hours=3, minutes=30) <= ts <= INICIO + timedelta(hours=3, minutes=45)
             snap = snapshot(ts, ps2="Critical" if falla else "OK", disco3="Failed" if falla else "OK",
                             vm_state="Offline" if offline else "Online",

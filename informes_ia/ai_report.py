@@ -53,7 +53,8 @@ PERFILES: dict[str, PerfilReporte] = {
         instrucciones="""
         - resumen.texto: disponibilidad del período y los dos o tres hechos más relevantes, con cifras.
         - infraestructura.energia / termica / mensaje: estado del equipamiento físico y del entorno,
-          en lenguaje de gestión; si no hay datos de un área, no la menciones.
+          en lenguaje de gestión. Si esa área figura en datos_no_disponibles, devolvé el campo
+          vacío ("") y no la menciones en ningún otro texto.
         - incidencias.analisis: cuántos incidentes detectó y gestionó el servicio y en qué áreas;
           si hubo casos de gestión del hospital, cuáles se atendieron.
         - calidad.estabilidad: tendencia frente al período anterior si la hay; si no, estabilidad del período.
@@ -67,7 +68,8 @@ PERFILES: dict[str, PerfilReporte] = {
         instrucciones="""
         - resumen.texto: estado real del hospital en el período, con cifras.
         - infraestructura.energia / termica / mensaje: hallazgos de hardware, temperatura, red y
-          capacidad con identificadores y duraciones.
+          capacidad con identificadores y duraciones. Si no hay datos de energía o de temperatura
+          (reportes_con_dato en 0), escribí sólo que faltan esos datos.
         - incidencias.analisis: eventos por tipo (cantidad, minutos, abiertos al cierre), software
           (Mirth, backups, CHECKDB, DICOM, portal) y casos de Asana relevantes.
         - calidad.estabilidad: comparación con el período anterior y patrones (recurrencias, horarios).
@@ -290,6 +292,16 @@ def completar_con_cifras(
 
     metricas = infra.get("metricas") or {}
     tipo = (data.get("meta") or {}).get("tipo", audiencia.INTERNO)
+
+    # Áreas sin un solo dato en el período (ej. sin iDRAC): el texto lo pone el código, no la IA.
+    # El esquema obliga a la IA a escribir estos campos y, sin datos, tendería a un "sin novedades".
+    con_dato = infra.get("reportes_con_dato") or {}
+    texto_infra = data.setdefault("infraestructura", {})
+    for campo, clave, nombre in (("energia", "energia", "energía (fuentes)"), ("termica", "temperatura", "temperatura")):
+        if infra and not con_dato.get(clave):
+            texto_infra[campo] = ("" if tipo == audiencia.CLIENTE else
+                                  f"Sin datos de {nombre} en el período: iDRAC no configurado o sin respuesta.")
+
     data["cifras"] = {
         "uptime_pct": infra.get("uptime_pct"),
         "uptime_definicion": (infra.get("uptime_definicion") if tipo == audiencia.INTERNO

@@ -38,7 +38,7 @@ def test_uptime_es_cobertura_y_no_depende_de_host_status(fuente):
 def test_disponibilidad_por_vm(fuente):
     infra = _resumen(fuente)["infraestructura"]
     total = infra["muestras_analizadas"]
-    assert infra["disponibilidad_vms_pct"]["ARP99APPV"] == round(100 * (total - 3) / total, 2)
+    assert infra["disponibilidad_vms_pct"]["ARP99APPV"] == round(100 * (total - 5) / total, 2)   # 03:05-03:25 (20 min)
     assert len(_eventos(_resumen(fuente), "nodo_offline")) == 1
 
 

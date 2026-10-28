@@ -86,8 +86,8 @@
     {% endif %}
 
     <h2>2. Estado de la Infraestructura</h2>
-    <h3>Energía</h3><p style="margin: 0;">{{ data.infraestructura.energia }}</p>
-    <h3>Térmica</h3><p style="margin: 0;">{{ data.infraestructura.termica }}</p>
+    {% if data.infraestructura.energia %}<h3>Energía</h3><p style="margin: 0;">{{ data.infraestructura.energia }}</p>{% endif %}
+    {% if data.infraestructura.termica %}<h3>Térmica</h3><p style="margin: 0;">{{ data.infraestructura.termica }}</p>{% endif %}
     {% if data.infraestructura.mensaje %}<p class="nota">{{ data.infraestructura.mensaje }}</p>{% endif %}
 
     <h2>3. Gestión de Incidencias</h2>

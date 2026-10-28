@@ -33,6 +33,9 @@ from .config_dinamica import ConfiguracionGlobal
 from .logging_utils import get_logger
 from .normalizacion import SnapshotNormalizado, parse_snapshot
 
+# state_reason de una VM que responde pero no se pudo leer (alerts_engine/infra.py del server).
+MOTIVOS_ACCESO = {"wmi_error", "ssh_error"}
+
 log = get_logger(__name__)
 
 
@@ -170,6 +173,8 @@ class EventTracker:
         self._muestras_nodo: dict[str, list[int]] = defaultdict(lambda: [0, 0])
         # En cuántos reportes vino cada tipo de dato (control de calidad).
         self._con_dato: dict[str, int] = defaultdict(int)
+        # Por VM: reportes en que no se pudo leer por error de acceso (WMI/SSH).
+        self._sin_acceso: dict[str, int] = defaultdict(int)
 
     def procesar_fila(self, raw_json: Any, host_status: str | None = None, ts_db: Any = None) -> None:
         """
@@ -279,6 +284,13 @@ class EventTracker:
                 )
 
         for nodo in snap.nodos_virtuales:
+            # Offline por error de acceso (credenciales o permisos de WMI/SSH): la VM responde, no
+            # está apagada; sólo no se pudo leer. Mismo criterio que alerts_engine/infra.py
+            # (MOTIVOS_ACCESO). Esa muestra no cuenta para la disponibilidad ni abre evento.
+            sin_acceso = nodo.state.lower() != "online" and (nodo.state_reason or "") in MOTIVOS_ACCESO
+            if sin_acceso:
+                self._sin_acceso[nodo.entidad_id] += 1
+                continue
             en_falla_offline = nodo.state.lower() != "online"
             contador = self._muestras_nodo[nodo.entidad_id]
             contador[1] += 1
@@ -341,6 +353,10 @@ class EventTracker:
         eventos: list[Evento] = []
         for rastreador in self._rastreadores.values():
             eventos.extend(rastreador.finalizar())
+        # Un Offline de uno o dos reportes es ruido de lectura, no una VM apagada: el motor del
+        # server recién alerta a los `offline_minutes`. Mismo criterio acá.
+        eventos = [e for e in eventos if e.tipo != "nodo_offline"
+                   or (e.duracion_min or 0) >= self.config.offline_minutes]
         eventos.sort(key=lambda e: e.inicio)
 
         uptime_pct, huecos = self._cobertura(inicio, fin)
@@ -360,6 +376,7 @@ class EventTracker:
             "huecos_sin_reportes": {"cantidad": len(huecos), "mas_largos": huecos[:10]},
             "disponibilidad_vms_pct": disponibilidad_nodos,
             "reportes_con_dato": dict(self._con_dato),
+            "vms_sin_acceso_reportes": dict(self._sin_acceso),
             "metricas": {
                 "cpu_host": self._stats(self._muestras_cpu_host),
                 "ram_host": self._stats(self._muestras_ram_host),

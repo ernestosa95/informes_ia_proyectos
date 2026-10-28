@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import ChainableUndefined, Environment, FileSystemLoader, select_autoescape
 
 from . import __version__
 from .logging_utils import get_logger
@@ -23,6 +23,9 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _env = Environment(
     loader=FileSystemLoader(_TEMPLATE_DIR),
     autoescape=select_autoescape(["html", "j2"]),
+    # Un campo que falta (ej. una sección borrada al editar el borrador) se muestra vacío en vez
+    # de cortar la generación del PDF.
+    undefined=ChainableUndefined,
 )
 
 COLORES_POR_TIPO = {
