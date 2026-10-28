@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        @page { size: A4; margin: 1.5cm 1.5cm 2cm 1.5cm;
+                @bottom-center { content: "{{ pie }}"; font-size: 8px; color: #aaa; } }
+        body { font-family: 'Segoe UI', 'DejaVu Sans', sans-serif; color: #2c3e50; font-size: 12px; line-height: 1.45; }
+        .header { border-bottom: 3px solid {{ color }}; padding-bottom: 12px; margin-bottom: 22px; }
+        .header table { width: 100%; }
+        .title { font-size: 20px; font-weight: bold; color: {{ color }}; }
+        .subtitle { font-size: 12px; color: #333; }
+        .meta { font-size: 10px; color: #7f8c8d; text-align: right; }
+
+        h2 { color: #2c3e50; font-size: 13px; text-transform: uppercase; border-bottom: 1px solid #eee;
+             margin-top: 22px; padding-bottom: 4px; }
+        h3 { font-size: 11px; text-transform: uppercase; color: #7f8c8d; margin: 12px 0 2px 0; }
+
+        .highlight { background: #f8f9fa; border-left: 4px solid {{ color }}; padding: 12px 15px; border-radius: 4px; }
+        .badge { background: #d4edda; color: #155724; padding: 3px 10px; border-radius: 10px; font-weight: bold; font-size: 12px; }
+        .badge.bajo { background: #fff3cd; color: #856404; }
+
+        /* Cifras: siempre valores cortos calculados por el sistema, nunca texto de la IA. */
+        .cifras { width: 100%; border-collapse: separate; border-spacing: 8px; margin: 0 -8px; }
+        .cifras td { background: #fff; border: 1px solid #eee; border-radius: 6px; padding: 8px; text-align: center; width: 25%; }
+        .val { font-size: 17px; font-weight: bold; display: block; }
+        .lbl { font-size: 9px; text-transform: uppercase; color: #999; }
+
+        .inc { width: 100%; border-collapse: separate; border-spacing: 8px; margin: 0 -8px; }
+        .inc td { width: 50%; padding: 12px; border-radius: 6px; }
+        .inc-ext { background: #fff3cd; color: #856404; }
+        .inc-int { background: #d1ecf1; color: #0c5460; }
+        .num { display: block; font-size: 22px; font-weight: bold; }
+
+        .nota { font-size: 11px; color: #555; padding: 10px; background: #fafafa; border-radius: 4px; margin-top: 8px; }
+        .reco { border-left: 3px solid #f39c12; padding-left: 10px; margin-top: 12px; }
+        .control { background: #fdecea; border-left: 4px solid #c0392b; padding: 10px 14px; font-size: 11px; }
+        table.det { width: 100%; border-collapse: collapse; font-size: 10px; }
+        table.det td, table.det th { border-bottom: 1px solid #eee; padding: 3px 6px; text-align: left; }
+        img { max-width: 100%; border: 1px solid #eee; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    {% set c = data.cifras or {} %}
+    <div class="header">
+        <table><tr>
+            <td><div class="title">TM Infraestructura</div><div class="subtitle">{{ titulo }} · INFORME DE GRUPO</div></td>
+            <td class="meta">{{ (data.meta.grupo or {}).nombre or data.meta.hospital }}<br>
+                {% if data.meta.periodo %}Período: {{ data.meta.periodo }}<br>{% endif %}
+                Emitido: {{ data.meta.fecha }}</td>
+        </tr></table>
+    </div>
+
+    <div class="highlight">
+        <span class="badge {% if c.uptime_promedio_pct is not none and c.uptime_promedio_pct < 99 %}bajo{% endif %}">DISPONIBILIDAD PROMEDIO: {{ data.resumen.uptime }}</span>
+        <p style="margin: 10px 0 0 0;">{{ data.resumen.texto }}</p>
+    </div>
+
+    <h2>1. Visión del grupo</h2>
+    <table class="cifras"><tr>
+        <td><span class="val">{{ c.hospitales }}</span><span class="lbl">Hospitales</span></td>
+        <td><span class="val">{{ c.hospitales_que_requieren_atencion }}</span><span class="lbl">Requieren atención</span></td>
+        <td><span class="val">{{ c.incidentes_criticos_totales }}</span><span class="lbl">Incidentes críticos</span></td>
+        <td><span class="val">{{ '{:,}'.format(c.estudios_totales).replace(',', '.') if c.estudios_totales is not none else 's/d' }}</span><span class="lbl">Estudios (RIS)</span></td>
+    </tr></table>
+    <p style="margin-top: 10px;">{{ data.situacion_general }}</p>
+    {% if grafico %}<div style="text-align: center; margin-top: 10px;"><img src="{{ grafico }}"></div>{% endif %}
+
+    <h2>2. Hospitales que requieren atención</h2>
+    <p>{{ data.hospitales_atencion }}</p>
+
+    <h2>3. Detalle por hospital</h2>
+    <table class="det">
+        <tr><th>Hospital</th><th>Disponibilidad</th><th>Incidentes (críticos)</th><th>Bases sin backup</th>
+            <th>Mirth detenidos</th><th>Estudios</th><th>Atención</th></tr>
+        {% for h in data.tabla_hospitales or [] %}
+        <tr>
+            <td><strong>{{ h.hospital_id }}</strong> {{ h.nombre }}</td>
+            <td>{{ '%.2f'|format(h.uptime_pct) ~ '%' if h.uptime_pct is not none else 's/d' }}</td>
+            <td>{{ h.incidentes if h.incidentes is not none else 's/d' }}{% if h.incidentes_criticos %} ({{ h.incidentes_criticos }}){% endif %}</td>
+            <td>{{ h.bases_sin_backup if h.bases_sin_backup is not none else 's/d' }}</td>
+            <td>{{ h.mirth_detenidos if h.mirth_detenidos is not none else 's/d' }}</td>
+            <td>{{ h.estudios_totales if h.estudios_totales is not none else 's/d' }}</td>
+            <td>{% if h.motivos_atencion %}<span style="color:#c0392b">{{ h.motivos_atencion|join('; ') }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <h2>4. Recomendaciones</h2>
+    <div class="reco"><p style="margin: 2px 0 0 0;">{{ data.recomendacion }}</p></div>
+
+    {% if data.meta.tipo == 'interno' and data.control_calidad %}
+    <h2>5. Control de calidad de los datos</h2>
+    <div class="control"><ul style="margin: 4px 0 0 0;">{% for a in data.control_calidad %}<li>{{ a }}</li>{% endfor %}</ul></div>
+    {% endif %}
+</body>
+</html>

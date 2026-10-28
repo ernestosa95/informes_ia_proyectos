@@ -9,11 +9,7 @@ no la tabla cruda.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from sqlalchemy import text
-
-from .conexion import get_engine
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -25,9 +21,9 @@ def _split_csv(valor: str | None) -> list[str]:
     return [v.strip() for v in valor.split(",") if v.strip()]
 
 
-def _leer_tabla_kv(fuente: str | Path, tabla: str = "configuracion") -> dict[str, str]:
-    with get_engine(fuente).connect() as conn:
-        return {clave: valor for clave, valor in conn.execute(text(f"SELECT clave, valor FROM {tabla}"))}
+def _leer_tabla_kv(fuente) -> dict[str, str]:
+    from .fuentes import resolver
+    return resolver(fuente).leer_configuracion()
 
 
 @dataclass(frozen=True)
@@ -84,7 +80,7 @@ class ConfiguracionGlobal:
     ssl_warning_days: int = field(default=30)
 
     @staticmethod
-    def cargar(fuente: str | Path) -> "ConfiguracionGlobal":
+    def cargar(fuente) -> "ConfiguracionGlobal":
         raw = _leer_tabla_kv(fuente)
 
         faltantes = [
@@ -143,5 +139,5 @@ class ConfiguracionGlobal:
         )
 
 
-def get_configuracion(fuente: str | Path) -> ConfiguracionGlobal:
+def get_configuracion(fuente) -> ConfiguracionGlobal:
     return ConfiguracionGlobal.cargar(fuente)

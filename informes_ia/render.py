@@ -39,7 +39,8 @@ def renderizar_html(data: dict[str, Any], grafico_uri: str | None = None) -> str
     pie = f"Generado por TecnoMonitor · informes_ia {__version__} · {tipo.upper()}"
     if meta.get("modelo"):
         pie += f" · redacción asistida por IA ({meta['modelo']})"
-    template = _env.get_template("reporte.html.j2")
+    plantilla = "reporte_grupo.html.j2" if meta.get("alcance") == "grupo" else "reporte.html.j2"
+    template = _env.get_template(plantilla)
     return template.render(
         data=data, grafico=grafico_uri, color=color_main, titulo=titulo_doc, pie=pie.replace('"', "'"),
     )

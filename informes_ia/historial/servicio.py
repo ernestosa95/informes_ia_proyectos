@@ -74,6 +74,7 @@ class ServicioReportes:
         generar_grafico: Callable[[dict[str, Any]], bytes | None] | None = None,
         preparar_contexto: PreparadorContexto | None = None,
         backoff_base_s: float = 0.0,  # 0 en tests; >0 en producción
+        al_cambiar_estado: Callable[[str, str], None] | None = None,
     ):
         self.almacen = almacen
         self.generador_ia = generador_ia
@@ -82,6 +83,19 @@ class ServicioReportes:
         # Si no se inyecta preparador, el contexto ES la petición (compat. prototipo).
         self.preparar_contexto = preparar_contexto or (lambda peticion: peticion)
         self.backoff_base_s = backoff_base_s
+        # Aviso opcional a la app (report_id, estado) al llegar a finalizado, error o
+        # aprobado. Lo usa el server para avisar en Asana a las programaciones
+        # (ARQUITECTURA.md > Programaciones). Un fallo del aviso no afecta al informe.
+        self.al_cambiar_estado = al_cambiar_estado
+
+    def _avisar(self, report_id: str, estado: Estado) -> None:
+        if self.al_cambiar_estado is None:
+            return
+        try:
+            self.al_cambiar_estado(report_id, estado.value)
+        except Exception:
+            log.exception("El aviso de cambio de estado (%s -> %s) falló; el informe sigue igual",
+                          report_id, estado.value)
 
     # ── API pública (ARQUITECTURA.md) ─────────────────────────────────────────────
 
@@ -145,6 +159,7 @@ class ServicioReportes:
                 f"El reporte {report_id} está en estado '{rep.estado}'."
             )
         self.almacen.marcar_aprobado(report_id, aprobado_por=aprobado_por)
+        self._avisar(report_id, Estado.APROBADO)
 
     # ── obtención del PDF (sólo aprobados) ───────────────────────────────
 
@@ -194,10 +209,12 @@ class ServicioReportes:
             # sin datos para el período, etc.
             self.almacen.set_estado(report_id, Estado.ERROR,
                                     error_mensaje=f"preparacion: {e}")
+            self._avisar(report_id, Estado.ERROR)
             return
         except Exception as e:
             self.almacen.set_estado(report_id, Estado.ERROR,
                                     error_mensaje=f"preparacion falló: {e}")
+            self._avisar(report_id, Estado.ERROR)
             return
 
         # ── Fase 2: llamada a la IA (con reintentos) ────────────────────
@@ -205,11 +222,13 @@ class ServicioReportes:
             data_json = self._intentar_con_reintentos(report_id, contexto, secciones)
         except _AgotadoError as e:
             self.almacen.set_estado(report_id, Estado.ERROR, error_mensaje=str(e))
+            self._avisar(report_id, Estado.ERROR)
             return
 
         # Éxito: generar y guardar el gráfico.
         grafico_png = self.generar_grafico(rep.peticion)
         self.almacen.guardar_resultado(report_id, data_json, grafico_png)
+        self._avisar(report_id, Estado.FINALIZADO)
 
     def _intentar_con_reintentos(
         self, report_id: str, contexto: Any, secciones: set[str]

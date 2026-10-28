@@ -14,11 +14,11 @@ migrar este cálculo a eso será mucho más preciso. Ver README > TODOs.
 """
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from .conexion import a_dict
 from .config_dinamica import ConfiguracionGlobal
 from .logging_utils import get_logger
 
@@ -51,9 +51,8 @@ def analizar_uso(
     ventanas_procesadas = 0
 
     for raw_json_str, _ts in filas:
-        try:
-            data = json.loads(raw_json_str)
-        except (json.JSONDecodeError, TypeError):
+        data = a_dict(raw_json_str)   # dict (FuenteServer) o texto JSON (FuenteSQL)
+        if data is None:
             continue
         ventanas_procesadas += 1
 

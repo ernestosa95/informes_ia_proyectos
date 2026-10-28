@@ -76,6 +76,9 @@ def _crear_tablas(conn, json_type: str) -> None:
     conn.execute(text(f"""CREATE TABLE reportes_historicos (id INTEGER PRIMARY KEY, hospital_id VARCHAR,
         timestamp TIMESTAMP, host_status VARCHAR, host_cpu_usage FLOAT, host_ram_usage FLOAT,
         power_watts INTEGER, full_json_data {json_type})"""))
+    conn.execute(text("""CREATE TABLE alertas (id INTEGER PRIMARY KEY, hospital_id VARCHAR, tipo VARCHAR,
+        mensaje VARCHAR, start_time TIMESTAMP, end_time TIMESTAMP, is_active INTEGER, asana_task_gid VARCHAR,
+        reaperturas INTEGER)"""))
     conn.execute(text("CREATE TABLE reportes_uso (id INTEGER PRIMARY KEY, hospital_id VARCHAR, timestamp TIMESTAMP, kpi_json_data TEXT)"))
     conn.execute(text(f"""CREATE TABLE software_monitoring (id INTEGER PRIMARY KEY, hospital_id VARCHAR,
         app_name VARCHAR, component_id VARCHAR, status_value VARCHAR, metric_value INTEGER,
@@ -84,6 +87,7 @@ def _crear_tablas(conn, json_type: str) -> None:
 
 def _poblar(conn) -> None:
     conn.execute(text("INSERT INTO hospitales_metadata VALUES (:h, 'Hospital de Prueba', '123')"), {"h": HOSPITAL})
+    conn.execute(text("INSERT INTO hospitales_metadata VALUES ('P98', 'Hospital Sano', '456')"))
     for clave, valor in {"offline_minutes": "15", "enable_power": "1", "enable_raid": "1", "enable_fans": "1",
                          "mirth_queued_threshold": "100"}.items():
         conn.execute(text("INSERT INTO configuracion VALUES (:c, :v)"), {"c": clave, "v": valor})
@@ -107,6 +111,31 @@ def _poblar(conn) -> None:
                 {"id": i, "h": HOSPITAL, "ts": ts.strftime("%Y-%m-%d %H:%M:%S"), "j": json.dumps(snap)},
             )
         ts += timedelta(minutes=5)
+
+    # P98: reporta todo el período sin huecos, sin alertas -> no requiere atención.
+    ts = INICIO
+    while ts <= FIN:
+        i += 1
+        conn.execute(
+            text("""INSERT INTO reportes_historicos VALUES (:id, 'P98', :ts, 'OK', 5.0, 40.0, 250, :j)"""),
+            {"id": i, "ts": ts.strftime("%Y-%m-%d %H:%M:%S"), "j": json.dumps(snapshot(ts))},
+        )
+        ts += timedelta(minutes=5)
+
+    # Alertas del motor para P99: una crítica (VM apagada), una común (RAM) abierta al cierre
+    # y una cerrada como [BAJA] (módulo dado de baja: no cuenta). Más una de antes del período.
+    alertas = [
+        ("VM_OFFLINE_ARP99APPV", "[OK] Normalizado", INICIO + timedelta(hours=3, minutes=10), INICIO + timedelta(hours=3, minutes=25)),
+        ("VM_RAM_ARP99APPV", "[WARNING] RAM 92%", INICIO + timedelta(hours=1), None),
+        ("MIRTH_[MIRTH_SE] OLD", "[BAJA] Módulo dado de baja", INICIO + timedelta(minutes=5), INICIO + timedelta(minutes=30)),
+        ("DISK_ARP99APPV_C:", "[OK] Normalizado", INICIO - timedelta(days=3), INICIO - timedelta(days=2)),
+    ]
+    for n, (tipo, msg, ini, fin) in enumerate(alertas, start=1):
+        conn.execute(
+            text("INSERT INTO alertas VALUES (:id, :h, :t, :m, :i, :f, :a, NULL, 0)"),
+            {"id": n, "h": HOSPITAL, "t": tipo, "m": msg, "i": ini.strftime("%Y-%m-%d %H:%M:%S"),
+             "f": fin.strftime("%Y-%m-%d %H:%M:%S") if fin else None, "a": 0 if fin else 1},
+        )
 
     # Mirth: dos canales de la MISMA instancia (antes se pisaban). Cola en metric_value;
     # errored acumulado 5 -> 8 -> 2 (reinicio del canal) = 3 + 2 = 5 errores en el período.
@@ -162,7 +191,7 @@ def fuente(request, tmp_path):
         url = os.environ["INFORMES_IA_TEST_PG_URL"]
     engine = create_engine(url)
     with engine.begin() as conn:
-        for tabla in ("hospitales_metadata", "configuracion", "reportes_historicos", "reportes_uso", "software_monitoring"):
+        for tabla in ("hospitales_metadata", "configuracion", "reportes_historicos", "reportes_uso", "software_monitoring", "alertas"):
             conn.execute(text(f"DROP TABLE IF EXISTS {tabla}"))
         _crear_tablas(conn, _DDL[engine.dialect.name])
         _poblar(conn)

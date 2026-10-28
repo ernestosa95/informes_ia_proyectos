@@ -100,6 +100,45 @@ class _RastreadorUmbral:
         return self.cerrados
 
 
+def cobertura(
+    horas: list[Any], inicio: datetime | None, fin: datetime | None, umbral_min: int
+) -> tuple[float | None, list[dict[str, Any]]]:
+    """
+    (% del período con el hospital reportando, huecos sin reportes, más largos primero).
+    Un hueco de más de `umbral_min` entre reportes, o al principio/fin del período,
+    cuenta entero como caída. Sin inicio/fin se usan el primer y el último reporte.
+    """
+    ordenadas = sorted(h.replace(tzinfo=None) for h in (a_datetime(x) for x in horas) if h is not None)
+    if not ordenadas:
+        return None, []
+    desde = inicio or ordenadas[0]
+    hasta = min(fin or ordenadas[-1], datetime.now())
+    total = (hasta - desde).total_seconds()
+    if total <= 0:
+        return None, []
+
+    umbral = timedelta(minutes=umbral_min)
+    huecos: list[tuple[datetime, datetime]] = []
+    anterior = desde
+    for h in ordenadas:
+        if h < desde or h > hasta:
+            continue
+        if h - anterior > umbral:
+            huecos.append((anterior, h))
+        anterior = h
+    if hasta - anterior > umbral:
+        huecos.append((anterior, hasta))
+
+    caido = sum((b - a).total_seconds() for a, b in huecos)
+    pct = round(max(0.0, 100.0 * (1 - caido / total)), 2)
+    detalle = [
+        {"desde": a.isoformat(timespec="minutes"), "hasta": b.isoformat(timespec="minutes"),
+         "duracion_min": round((b - a).total_seconds() / 60)}
+        for a, b in sorted(huecos, key=lambda x: x[1] - x[0], reverse=True)
+    ]
+    return pct, detalle
+
+
 class EventTracker:
     def __init__(self, config: ConfiguracionGlobal):
         self.config = config
@@ -296,39 +335,7 @@ class EventTracker:
         }
 
     def _cobertura(self, inicio: datetime | None, fin: datetime | None) -> tuple[float | None, list[dict[str, Any]]]:
-        """
-        (% del período con el hospital reportando, huecos sin reportes).
-        Sin inicio/fin explícitos se usa el primer y el último reporte.
-        """
-        horas = sorted(self._horas_reporte)
-        if not horas:
-            return None, []
-        desde = inicio or horas[0]
-        hasta = min(fin or horas[-1], datetime.now())
-        total = (hasta - desde).total_seconds()
-        if total <= 0:
-            return None, []
-
-        umbral = timedelta(minutes=self.config.offline_minutes)
-        huecos: list[tuple[datetime, datetime]] = []
-        anterior = desde
-        for h in horas:
-            if h < desde or h > hasta:
-                continue
-            if h - anterior > umbral:
-                huecos.append((anterior, h))
-            anterior = h
-        if hasta - anterior > umbral:
-            huecos.append((anterior, hasta))
-
-        caido = sum((b - a).total_seconds() for a, b in huecos)
-        pct = round(max(0.0, 100.0 * (1 - caido / total)), 2)
-        detalle = [
-            {"desde": a.isoformat(timespec="minutes"), "hasta": b.isoformat(timespec="minutes"),
-             "duracion_min": round((b - a).total_seconds() / 60)}
-            for a, b in sorted(huecos, key=lambda x: x[1] - x[0], reverse=True)
-        ]
-        return pct, detalle
+        return cobertura(self._horas_reporte, inicio, fin, self.config.offline_minutes)
 
     def resumen(self, inicio: datetime | None = None, fin: datetime | None = None) -> dict[str, Any]:
         eventos: list[Evento] = []

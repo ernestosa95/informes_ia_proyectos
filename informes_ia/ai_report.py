@@ -220,10 +220,16 @@ def generar_json_con_ia(
     log.info("Generando JSON del informe (%s) con modelo %s", tipo_reporte, model_name)
 
     prompt = _construir_prompt(resumen, asana_casos, hospital_nombre, tipo_reporte)
-    contenido: list[Any] = [prompt, *pdfs]
+    return _llamar_gemini(client, [prompt, *pdfs], ESQUEMA_RESPUESTA, model_name)
+
+
+def _llamar_gemini(
+    client: genai.Client, contenido: list[Any], esquema: dict[str, Any], model_name: str
+) -> dict[str, Any]:
+    """Llamada común a Gemini con JSON Schema forzado. Lanza ErrorAPIGemini o RespuestaNoJSON."""
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        response_json_schema=ESQUEMA_RESPUESTA,
+        response_json_schema=esquema,
         temperature=0.4,
     )
 
@@ -267,9 +273,10 @@ def completar_con_cifras(
     eventos = infra.get("eventos") or []
     software = resumen.get("software") or {}
 
+    data.setdefault("meta", {})["alcance"] = "hospital"
     periodo = resumen.get("periodo") or {}
     if periodo.get("desde") and periodo.get("hasta"):
-        data.setdefault("meta", {})["periodo"] = f"{str(periodo['desde'])[:10]} al {str(periodo['hasta'])[:10]}"
+        data["meta"]["periodo"] = f"{str(periodo['desde'])[:10]} al {str(periodo['hasta'])[:10]}"
     data.setdefault("resumen", {})["uptime"] = _fmt_pct(infra.get("uptime_pct"))
     incid = data.setdefault("incidencias", {})
     incid["externas"] = len(asana_casos.get("humanos", []))
@@ -298,3 +305,91 @@ def _contar_por_tipo(eventos: list[dict[str, Any]]) -> dict[str, int]:
     for e in eventos:
         conteo[e.get("tipo", "?")] = conteo.get(e.get("tipo", "?"), 0) + 1
     return conteo
+
+
+# ── informes de GRUPO (grupo.py) ────────────────────────────────────────────
+
+ESQUEMA_RESPUESTA_GRUPO: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "meta": ESQUEMA_RESPUESTA["properties"]["meta"],
+        "resumen": ESQUEMA_RESPUESTA["properties"]["resumen"],
+        "situacion_general": {"type": "string"},
+        "hospitales_atencion": {"type": "string"},
+        "recomendacion": {"type": "string"},
+    },
+    "required": ["meta", "resumen", "situacion_general", "hospitales_atencion", "recomendacion"],
+}
+
+
+def _construir_prompt_grupo(resumen: dict[str, Any], tipo_reporte: str) -> str:
+    perfil = PERFILES.get(tipo_reporte)
+    if perfil is None:
+        raise TipoReporteInvalido(
+            f"Tipo de reporte '{tipo_reporte}' no reconocido. Opciones: {list(PERFILES)}"
+        )
+    nombre = (resumen.get("grupo") or {}).get("nombre") or "el grupo"
+    return f"""
+    ACTÚA COMO UN {perfil.rol} DE "TECNOMONITOR".
+    Redactá los textos del reporte {tipo_reporte} CONSOLIDADO del grupo de hospitales "{nombre}".
+    TONO: {perfil.tono}
+    {REGLAS_DE_DATOS}
+    El informe se publica con una TABLA de una fila por hospital (la arma el sistema
+    con los mismos datos que ves abajo). No la repitas: los textos tienen que dar la
+    lectura de conjunto y lo que importa.
+
+    DATOS DEL GRUPO (agregados, una fila por hospital, hospitales que requieren
+    atención con sus motivos, y control de calidad de los datos):
+
+    {json.dumps(resumen, ensure_ascii=False, default=str)}
+
+    QUÉ ESCRIBIR:
+    - resumen.texto: estado del grupo en el período, en dos o tres oraciones.
+    - situacion_general: cómo estuvo el conjunto (disponibilidad, incidentes, software,
+      actividad clínica), con patrones comunes si los hay (ej. varios hospitales con el
+      mismo problema).
+    - hospitales_atencion: los hospitales de "hospitales_que_requieren_atencion", del
+      más al menos urgente, con sus motivos en lenguaje claro. Si no hay, decilo.
+    - recomendacion: acciones concretas para el grupo, priorizadas.
+
+    En "meta" poné tipo "{tipo_reporte}", fecha "{datetime.now().strftime('%d/%m/%Y')}" y
+    hospital "{nombre}".
+    """
+
+
+def generar_json_grupo(
+    client: genai.Client, resumen: dict[str, Any], tipo_reporte: str, model_name: str
+) -> dict[str, Any]:
+    """Textos del informe de grupo. Lanza ErrorAPIGemini o RespuestaNoJSON."""
+    log.info("Generando JSON del informe de grupo (%s) con modelo %s", tipo_reporte, model_name)
+    prompt = _construir_prompt_grupo(resumen, tipo_reporte)
+    return _llamar_gemini(client, [prompt], ESQUEMA_RESPUESTA_GRUPO, model_name)
+
+
+def completar_con_cifras_grupo(data: dict[str, Any], resumen: dict[str, Any]) -> dict[str, Any]:
+    """Cifras, tabla por hospital y control de calidad del grupo (las pone el código)."""
+    ag = resumen.get("agregados") or {}
+    meta = data.setdefault("meta", {})
+    meta["alcance"] = "grupo"
+    meta["grupo"] = resumen.get("grupo")
+    periodo = resumen.get("periodo") or {}
+    if periodo.get("desde") and periodo.get("hasta"):
+        meta["periodo"] = f"{str(periodo['desde'])[:10]} al {str(periodo['hasta'])[:10]}"
+    data.setdefault("resumen", {})["uptime"] = _fmt_pct(ag.get("uptime_promedio_pct"))
+    data["cifras"] = dict(ag)
+    data["tabla_hospitales"] = [
+        {
+            "hospital_id": f.get("hospital_id"),
+            "nombre": f.get("nombre"),
+            "uptime_pct": f.get("uptime_pct"),
+            "incidentes": f.get("incidentes"),
+            "incidentes_criticos": f.get("incidentes_criticos"),
+            "bases_sin_backup": f.get("bases_sin_backup"),
+            "mirth_detenidos": f.get("mirth_detenidos"),
+            "estudios_totales": f.get("estudios_totales"),
+            "motivos_atencion": f.get("motivos_atencion") or [],
+        }
+        for f in resumen.get("hospitales") or []
+    ]
+    data["control_calidad"] = resumen.get("control_calidad") or []
+    return data

@@ -16,6 +16,7 @@ ai_report.py termina mandando al modelo.
 """
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,11 @@ def generar_resumen(
     """
     config = config or get_configuracion(fuente)
 
-    filas_historial = db.obtener_historial_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
+    # El historial puede llegar como generador (FuenteServer: un mes son miles de reportes y no
+    # conviene tenerlos todos en memoria): se mira si trae algo sin consumirlo.
+    historial = iter(db.obtener_historial_crudo(fuente, hospital_id, fecha_inicio, fecha_fin))
+    primera = next(historial, None)
+    filas_historial = itertools.chain([primera], historial) if primera is not None else None
     filas_uso = db.obtener_uso_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
     filas_software = db.obtener_software_crudo(fuente, hospital_id, fecha_inicio, fecha_fin)
     backups = db.obtener_ultimos_backups(fuente, hospital_id, fecha_fin)
@@ -60,10 +65,8 @@ def generar_resumen(
             f"entre {fecha_inicio} y {fecha_fin}"
         )
 
-    log.info(
-        "Pre-procesando %s: %d snapshots infra, %d ventanas de uso, %d filas de software",
-        hospital_id, len(filas_historial), len(filas_uso), len(filas_software),
-    )
+    log.info("Pre-procesando %s: %d ventanas de uso, %d filas de software",
+             hospital_id, len(filas_uso), len(filas_software))
 
     infra = (
         event_tracker.analizar_historial(filas_historial, config, fecha_inicio, fecha_fin)
