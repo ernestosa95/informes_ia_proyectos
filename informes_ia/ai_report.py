@@ -29,7 +29,7 @@ from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from . import audiencia
+from . import audiencia, contexto_dominio
 from .logging_utils import get_logger
 
 log = get_logger(__name__)
@@ -199,6 +199,7 @@ def _construir_prompt(
     {REGLAS_DE_DATOS}
     {audiencia.VOCABULARIO[tipo_reporte]}
     {audiencia.diccionario(tipo_reporte)}
+    {contexto_dominio.para_prompt(tipo_reporte)}
     DATOS DEL PERÍODO (ya calculados por el sistema; son tu única fuente):
 
     {json.dumps(vista, ensure_ascii=False, default=str)}
@@ -390,6 +391,7 @@ def _construir_prompt_grupo(resumen: dict[str, Any], tipo_reporte: str) -> str:
     {REGLAS_DE_DATOS}
     {audiencia.VOCABULARIO[tipo_reporte]}
     {audiencia.diccionario(tipo_reporte)}
+    {contexto_dominio.para_prompt(tipo_reporte)}
     El informe se publica con una TABLA de una fila por hospital (la arma el sistema con los
     mismos datos). No la repitas: los textos dan la lectura de conjunto y lo que importa.
 

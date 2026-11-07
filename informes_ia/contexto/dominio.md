@@ -1,8 +1,10 @@
 # Contexto del dominio para los informes IA — BORRADOR para revisar
 
-> **Estado: borrador del 2026-10-28, armado con lo que hay en Asana y en el código. TODAVÍA NO
-> SE USA en el prompt.** Antes de conectarlo hay que revisar cada sección y contestar las
-> preguntas del final. Lo marcado con **(confirmar)** es una inferencia, no un dato verificado.
+> **Estado: borrador del 2026-10-28, armado con lo que hay en Asana y en el código.** Se manda
+> al prompt solo con `INFORMES_IA_CONTEXTO_DOMINIO=1` (apagado por defecto; ver
+> `contexto_dominio.py`). Lo marcado con **(confirmar)** es una inferencia y NO se manda.
+> El informe interno recibe las secciones 1 a 8; el del cliente, solo la 1 y la 8, sin lo que
+> está entre `<!-- interno -->` y `<!-- /interno -->`. La sección 9 nunca se manda.
 > Este archivo no debe tener datos personales, credenciales ni nombres de pacientes.
 
 ## 1. Quiénes somos
@@ -12,13 +14,14 @@ de Ebit/Esaote, en hospitales públicos y privados de Argentina. La plataforma i
 
 - **RIS**: gestión del servicio de diagnóstico por imágenes (admisión, agenda, asignación de
   equipos, informes).
-- **PACS**: almacenamiento y distribución de imágenes médicas (DICOM).
+- **PACS**: almacenamiento y distribución de imágenes médicas.
 - **CVIS**: módulo de cardiología (hemodinamia, ecocardiografía, ECG).
 - **Visores**: Eunity (web) y Univiewer; servicios 3D.
 - **Dictado por voz** para los informes (Dycendo **(confirmar)**).
 - **Portal paciente**: los pacientes consultan sus estudios e informes por web o código QR.
 - **VNA / LongTerm**: archivo de largo plazo.
 
+<!-- interno -->
 Proyectos y redes de hospitales:
 - **BID**: hospitales H01–H46, con servidores Dell PowerEdge R7525 y mantenimiento preventivo
   (actualización de firmware).
@@ -26,6 +29,7 @@ Proyectos y redes de hospitales:
 - **PAMI**: policlínicos y hospitales PM* (Milstein, Houssay, Ituzaingó, Policlínicos I y II).
 - **Privados y obras sociales**: HUPC, Sanatorio de la Mujer, Hospital Español de Mar del Plata,
   ICBA, OSECAC.
+<!-- /interno -->
 
 ## 2. Cómo se da el soporte
 
@@ -70,7 +74,7 @@ Proyectos y redes de hospitales:
   |---|---|
   | `APPV` | Servidor de aplicaciones: SQL Server con las bases de Suitestensa y los servicios de RIS/PACS. Es la VM principal. |
   | `EU0V` | Servidor del visor Eunity. Lleva certificado SSL propio. |
-  | `PRTV` | VM del portal paciente **(confirmar)** |
+  | `PRTV` | VM del portal paciente (IIS con certificado propio; ej. ARH9PRTV en H09) |
   | `VOCV` | Dictado por voz **(confirmar)** |
   | `SQLV` | SQL Server separado; en algunos PAMI **(confirmar)** |
 
@@ -116,7 +120,7 @@ Proyectos y redes de hospitales:
 | Señal | Qué significa para el hospital | Precaución |
 |---|---|---|
 | Disponibilidad (% del período reportando) | Si los sistemas estuvieron en línea | Un hueco puede ser una caída real **o** el agente sin enviar datos; no afirmar cuál sin otra evidencia |
-| VM fuera de línea / reinicio | Servicios de esa VM interrumpidos (RIS/PACS si es la APPV) | Un reinicio puede ser programado (mantenimiento, actualizaciones) |
+| VM fuera de línea / reinicio | Servicios de esa VM interrumpidos (RIS/PACS si es la APPV) | Un reinicio puede ser programado (mantenimiento, actualizaciones). Una VM "sin lectura" (el agente no pudo consultarla por WMI/SSH) no es una VM apagada |
 | Servicio de Windows detenido | Una función de Suitestensa sin funcionar | Algunos servicios no se usan en todos los hospitales |
 | RAM de VM alta | Posible lentitud | En las APPV, el SQL Server usa casi toda la RAM a propósito, y hay una hipótesis de "ballooning" de Proxmox: **un 85–90 % sostenido no es, por sí solo, una falla** |
 | Disco de VM lleno | Riesgo de que se detenga la escritura (imágenes, bases) | Algunos discos trabajan llenos a propósito y tienen exclusión |
@@ -144,7 +148,7 @@ Sale de los seguimientos de Éxito del cliente y de los resúmenes ejecutivos de
 
 ## 9. Preguntas pendientes (contestar antes de conectar este archivo)
 
-1. Sufijos de VM: confirmar `PRTV`, `VOCV`, `SQLV` y agregar los que falten.
+1. Sufijos de VM: confirmar `VOCV` y `SQLV` (`PRTV` confirmado con H09) y agregar los que falten.
 2. Ante un incidente, ¿qué hace exactamente TecnoMonitor o el equipo (solo avisa, coordina con
    Ebit/Esaote, interviene)? ¿Qué no le corresponde (infraestructura de red del hospital,
    equipos de las modalidades, el HIS)?
